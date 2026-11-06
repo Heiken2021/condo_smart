@@ -1,0 +1,24 @@
+from pathlib import Path
+import streamlit as st
+from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
+from core.config import database_url
+@st.cache_resource
+def pool():
+ p=ConnectionPool(conninfo=database_url(),min_size=1,max_size=5,kwargs={'row_factory':dict_row,'autocommit':False},open=True);p.wait(timeout=20);return p
+def execute(sql,params=(),returning=False):
+ with pool().connection() as c:
+  with c.cursor() as cur:cur.execute(sql,params);r=cur.fetchone() if returning else None
+  c.commit();return r
+def fetch_all(sql,params=()):
+ with pool().connection() as c:
+  with c.cursor() as cur:cur.execute(sql,params);return cur.fetchall()
+def fetch_one(sql,params=()):
+ x=fetch_all(sql,params);return x[0] if x else None
+def run_script(path):
+ with pool().connection() as c:
+  with c.cursor() as cur:cur.execute(Path(path).read_text(encoding='utf-8'))
+  c.commit()
+def init_database():
+ root=Path(__file__).parents[1];run_script(root/'database/schema.sql')
+ for f in sorted((root/'database/migrations').glob('*.sql')):run_script(f)

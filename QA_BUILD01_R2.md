@@ -1,0 +1,2 @@
+# QA Gate Build 01 Revision 2
+Required gates: Schema, Root Security, Last SuperAdmin protection, Central authorization, Multiple admins per property, full Property CRUD, Branding visible on Property/Dashboard/Portfolio, Portfolio cards/KPIs/charts, Dashboard KPIs/charts, Audit and all prior modules. Technical pass requires all automated tests, zero Critical and zero High. UAT approval is required before feature freeze.

@@ -1,0 +1,7 @@
+streamlit==1.66.1
+pandas==2.3.3
+psycopg[binary]==3.3.6
+psycopg-pool>=3.3,<4
+Pillow>=11,<12
+plotly>=6,<7
+pytest>=8.3,<9

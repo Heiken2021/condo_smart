@@ -1,0 +1,94 @@
+from pathlib import Path
+import hashlib
+import time
+import streamlit as st
+from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
+from core.config import database_url
+
+MIGRATION_LOCK = 728422012
+
+@st.cache_resource
+def pool():
+    p = ConnectionPool(
+        conninfo=database_url(),
+        min_size=1,
+        max_size=5,
+        kwargs={"row_factory": dict_row, "autocommit": False},
+        open=True,
+    )
+    p.wait(timeout=20)
+    return p
+
+
+def execute(sql, params=(), returning=False):
+    with pool().connection() as c:
+        with c.cursor() as cur:
+            cur.execute(sql, params)
+            row = cur.fetchone() if returning else None
+        c.commit()
+        return row
+
+
+def fetch_all(sql, params=()):
+    with pool().connection() as c:
+        with c.cursor() as cur:
+            cur.execute(sql, params)
+            return cur.fetchall()
+
+
+def fetch_one(sql, params=()):
+    rows = fetch_all(sql, params)
+    return rows[0] if rows else None
+
+
+def _checksum(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _ensure_migration_registry(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS schema_migrations(
+                version VARCHAR(120) PRIMARY KEY,
+                checksum VARCHAR(64) NOT NULL,
+                applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+    conn.commit()
+
+
+def _apply_file_once(conn, path, version):
+    checksum = _checksum(path)
+    with conn.cursor() as cur:
+        cur.execute("SELECT checksum FROM schema_migrations WHERE version=%s", (version,))
+        existing = cur.fetchone()
+        if existing:
+            if existing["checksum"] != checksum:
+                raise RuntimeError(f"La migración {version} cambió después de haber sido aplicada.")
+            return False
+        cur.execute(Path(path).read_text(encoding="utf-8"))
+        cur.execute(
+            "INSERT INTO schema_migrations(version,checksum) VALUES(%s,%s)",
+            (version, checksum),
+        )
+    conn.commit()
+    return True
+
+
+def init_database():
+    """Serialize schema initialization and execute every migration at most once."""
+    root = Path(__file__).parents[1]
+    with pool().connection() as conn:
+        # Session-level advisory lock protects Streamlit reruns / concurrent sessions.
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_lock(%s)", (MIGRATION_LOCK,))
+        try:
+            _ensure_migration_registry(conn)
+            _apply_file_once(conn, root / "database/schema.sql", "000_baseline")
+            for path in sorted((root / "database/migrations").glob("*.sql")):
+                _apply_file_once(conn, path, path.name)
+        finally:
+            with conn.cursor() as cur:
+                cur.execute("SELECT pg_advisory_unlock(%s)", (MIGRATION_LOCK,))
+            conn.commit()
