@@ -1,11 +1,12 @@
 import streamlit as st
 from core.db import execute
 from core.auth import audit
+from core.access import refresh_current_property
 from core.authorization import authorize
-from components.ui import title, table, property_header
+from components.ui import title, table, property_header, clickable_image
 from services.catalogs import options
 from services.media import validate
-from services.properties import list_properties, dependencies, deletable
+from services.properties import list_properties, dependencies, deletable, update_logo, delete_logo, update_cover, delete_cover, get_property
 from services.property_admins import list_admins, create_admin, revoke, reactivate, reset_password
 
 
@@ -209,31 +210,43 @@ def render():
         if not access.allowed:
             denied_message("INMUEBLE_BRANDING")
         else:
-            with st.form("branding"):
-                logo = st.file_uploader("Nuevo Logotipo", type=["jpg", "jpeg", "png", "bmp"])
-                cover = st.file_uploader("Nueva Portada", type=["jpg", "jpeg", "png", "bmp"])
-                submitted = st.form_submit_button("Guardar Identidad")
-            if submitted:
+            st.subheader("Logotipo")
+            if row.get("logo_data"):
+                clickable_image(row["logo_data"], row.get("logo_mime") or "image/png", f"Logotipo - {row['nombre']}", width=140, max_height=100)
+            logo = st.file_uploader("Nuevo Logotipo", type=["jpg", "jpeg", "png", "bmp"], key="property_logo")
+            c1, c2 = st.columns(2)
+            if c1.button("Guardar / Cambiar Logotipo", disabled=logo is None):
                 try:
-                    logo_file = validate(logo, 2) if logo else None
-                    cover_file = validate(cover, 5) if cover else None
-                    execute(
-                        "UPDATE condominios SET logo_data=COALESCE(%s,logo_data),logo_mime=COALESCE(%s,logo_mime),portada_data=COALESCE(%s,portada_data),portada_mime=COALESCE(%s,portada_mime) WHERE id=%s",
-                        (
-                            logo_file["data"] if logo_file else None,
-                            logo_file["mime"] if logo_file else None,
-                            cover_file["data"] if cover_file else None,
-                            cover_file["mime"] if cover_file else None,
-                            row["id"],
-                        ),
-                    )
-                    audit("INMUEBLE_BRANDING", "condominios", row["id"])
-                    st.success("Identidad actualizada correctamente.")
+                    media = validate(logo, 2)
+                    action = "INMUEBLE_LOGO_CAMBIO" if row.get("logo_data") else "INMUEBLE_LOGO_ALTA"
+                    update_logo(row["id"], media["data"], media["mime"])
+                    audit(action, "condominios", row["id"], after={"mime": media["mime"], "name": media["name"]})
+                    refresh_current_property(row["id"])
                     st.rerun()
                 except ValueError as exc:
                     st.error(str(exc))
-                except Exception as exc:
-                    st.error(f"No fue posible actualizar la identidad. Detalle: {exc}")
+            delete_logo_confirm = c2.checkbox("Confirmo eliminar logotipo", key="delete_logo_confirm")
+            if c2.button("Eliminar Logotipo", disabled=not (delete_logo_confirm and row.get("logo_data"))):
+                delete_logo(row["id"]);audit("INMUEBLE_LOGO_BAJA", "condominios", row["id"]);refresh_current_property(row["id"]);st.rerun()
+            st.divider()
+            st.subheader("Portada / Imagen De Identidad")
+            if row.get("portada_data"):
+                clickable_image(row["portada_data"], row.get("portada_mime") or "image/jpeg", f"Portada - {row['nombre']}", width=220, max_height=125)
+            cover = st.file_uploader("Nueva Portada", type=["jpg", "jpeg", "png", "bmp"], key="property_cover")
+            c1, c2 = st.columns(2)
+            if c1.button("Guardar / Cambiar Portada", disabled=cover is None):
+                try:
+                    media = validate(cover, 5)
+                    action = "INMUEBLE_PORTADA_CAMBIO" if row.get("portada_data") else "INMUEBLE_PORTADA_ALTA"
+                    update_cover(row["id"], media["data"], media["mime"])
+                    audit(action, "condominios", row["id"], after={"mime": media["mime"], "name": media["name"]})
+                    refresh_current_property(row["id"])
+                    st.rerun()
+                except ValueError as exc:
+                    st.error(str(exc))
+            delete_cover_confirm = c2.checkbox("Confirmo eliminar portada", key="delete_cover_confirm")
+            if c2.button("Eliminar Portada", disabled=not (delete_cover_confirm and row.get("portada_data"))):
+                delete_cover(row["id"]);audit("INMUEBLE_PORTADA_BAJA", "condominios", row["id"]);refresh_current_property(row["id"]);st.rerun()
 
     with tabs[4]:
         selected = st.selectbox("Inmueble", list(labels), key="state")

@@ -30,3 +30,10 @@ env/
 # Backups
 *.bak
 *.tmp
+
+# Archivos locales de analisis R2
+R2_FILE_LIST.txt
+R2_SOURCE_FOR_R3.txt
+
+# Local R3 patch backups
+.r3-backup-*/

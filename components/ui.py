@@ -40,7 +40,7 @@ def datauri(data, mime='image/jpeg'):
     return _datauri(data, mime)
 
 
-def _clickable_image(data, mime, alt, width=220, max_height=None):
+def clickable_image(data, mime, alt, width=220, max_height=None):
     """Small preview that opens the original image in a new browser tab."""
     if not data:
         return
@@ -63,7 +63,7 @@ def property_header(p):
     left, center, right = st.columns([1, 2.7, 1.5], vertical_alignment='center')
     with left:
         if p.get('logo_data'):
-            _clickable_image(
+            clickable_image(
                 p['logo_data'],
                 p.get('logo_mime') or 'image/png',
                 f"Logotipo - {p.get('nombre', 'Inmueble')}",
@@ -76,7 +76,7 @@ def property_header(p):
         st.caption(' · '.join(str(v) for v in details if v))
     with right:
         if p.get('portada_data'):
-            _clickable_image(
+            clickable_image(
                 p['portada_data'],
                 p.get('portada_mime') or 'image/jpeg',
                 f"Portada - {p.get('nombre', 'Inmueble')}",
