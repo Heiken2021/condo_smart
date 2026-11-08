@@ -88,7 +88,18 @@ def init_database():
             _apply_file_once(conn, root / "database/schema.sql", "000_baseline")
             for path in sorted((root / "database/migrations").glob("*.sql")):
                 _apply_file_once(conn, path, path.name)
-        finally:
+        except Exception:
+            # PostgreSQL rejects any further SQL on an aborted transaction.
+            # Restore the connection before trying to release the advisory lock.
+            conn.rollback()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT pg_advisory_unlock(%s)", (MIGRATION_LOCK,))
+                conn.commit()
+            except Exception:
+                conn.rollback()
+            raise
+        else:
             with conn.cursor() as cur:
                 cur.execute("SELECT pg_advisory_unlock(%s)", (MIGRATION_LOCK,))
             conn.commit()

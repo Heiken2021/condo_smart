@@ -1,5 +1,5 @@
 import os,streamlit as st
-PRODUCT_NAME='Condo_Smart'; BUILD='4.2.2-build.01-r2'; SCHEMA_VERSION='4.2.2.1-r2'
+PRODUCT_NAME='Condo_Smart'; BUILD='4.2.2-build.01-r3.1-visual'; SCHEMA_VERSION='4.2.2.1-r3'
 def secret(name,default=None):
  try:return st.secrets[name]
  except Exception:return os.getenv(name,default)

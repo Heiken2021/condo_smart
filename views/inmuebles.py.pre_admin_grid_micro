@@ -1,0 +1,711 @@
+import streamlit as st
+import pandas as pd
+from core.db import execute
+from core.auth import audit
+from core.access import refresh_current_property
+from core.authorization import authorize
+from components.ui import title, table, property_header, clickable_image
+from services.catalogs import options
+from services.media import validate
+from services.properties import list_properties, dependencies, deletable, update_logo, delete_logo, update_cover, delete_cover, get_property
+from services.property_admins import list_admins, create_admin, revoke, reactivate, reset_password, get_admin, update_admin_profile
+
+
+def decision(user, permission, property_id=None):
+    return authorize(user, permission, property_id)
+
+
+def denied_message(permission):
+    st.info(f"Tu perfil no cuenta con el permiso {permission} para esta operación.")
+
+
+def form(row=None, key="p"):
+    row = row or {}
+    types = options("TIPO_INMUEBLE")
+    reverse = {value: name for name, value in types.items()}
+    if not types:
+        st.error("No existen conceptos activos en el catálogo Tipo De Inmueble.")
+        st.stop()
+
+    col1, col2 = st.columns(2)
+    clave = col1.text_input("Clave", row.get("clave", ""), key=key + "c")
+    nombre = col2.text_input("Nombre", row.get("nombre", ""), key=key + "n")
+
+    col1, col2 = st.columns(2)
+    display = reverse.get(row.get("tipo_codigo"), list(types)[0])
+    tipo = col1.selectbox(
+        "Tipo De Inmueble",
+        list(types),
+        index=list(types).index(display),
+        key=key + "t",
+    )
+    currencies = ["MXN", "USD", "EUR", "CAD"]
+    current_currency = row.get("moneda_base") or "MXN"
+    moneda = col2.selectbox(
+        "Moneda Base",
+        currencies,
+        index=currencies.index(current_currency),
+        key=key + "m",
+    )
+
+    direccion = st.text_area("Dirección", row.get("direccion") or "", key=key + "d")
+    col1, col2 = st.columns(2)
+    rfc = col1.text_input("RFC", row.get("rfc") or "", key=key + "r")
+    zona = col2.text_input(
+        "Zona Horaria",
+        row.get("zona_horaria") or "America/Mexico_City",
+        key=key + "z",
+    )
+    return {
+        "clave": clave.upper().strip(),
+        "nombre": nombre.strip(),
+        "tipo_codigo": types[tipo],
+        "moneda_base": moneda,
+        "direccion": direccion,
+        "rfc": rfc,
+        "zona_horaria": zona,
+    }
+
+
+def render():
+    user = st.session_state.user
+    title("Inmuebles", "Datos Generales, Administradores, Identidad Y Estado")
+    rows = list_properties()
+    type_options = options("TIPO_INMUEBLE")
+    friendly = []
+    for item in rows:
+        friendly.append(
+            {
+                **item,
+                "tipo_codigo": next(
+                    (name for name, code in type_options.items() if code == item["tipo_codigo"]),
+                    item["tipo_codigo"],
+                ),
+            }
+        )
+    st.subheader("Consulta Y Selección De Inmuebles")
+    search_col, type_col, status_col, currency_col = st.columns([2.2, 1.3, 1.1, 1.0])
+    search_text = search_col.text_input(
+        "Buscar",
+        key="property_grid_search",
+        placeholder="Clave, nombre, dirección, RFC o tipo...",
+    ).strip().casefold()
+    type_values = sorted({str(item.get("tipo_codigo") or "") for item in friendly if item.get("tipo_codigo")})
+    type_filter = type_col.selectbox("Tipo", ["Todos"] + type_values, key="property_grid_type")
+    status_filter = status_col.selectbox("Estado", ["Todos", "Activos", "Inactivos"], key="property_grid_status")
+    currency_values = sorted({str(item.get("moneda_base") or "") for item in rows if item.get("moneda_base")})
+    currency_filter = currency_col.selectbox("Moneda", ["Todas"] + currency_values, key="property_grid_currency")
+
+    filtered = []
+    for raw, shown in zip(rows, friendly):
+        searchable = " ".join(
+            str(raw.get(field) or "")
+            for field in ("clave", "nombre", "direccion", "rfc", "tipo_codigo")
+        ).casefold()
+        if search_text and search_text not in searchable:
+            continue
+        if type_filter != "Todos" and str(shown.get("tipo_codigo") or "") != type_filter:
+            continue
+        if status_filter == "Activos" and not raw.get("activo"):
+            continue
+        if status_filter == "Inactivos" and raw.get("activo"):
+            continue
+        if currency_filter != "Todas" and str(raw.get("moneda_base") or "") != currency_filter:
+            continue
+        filtered.append(raw)
+
+    grid_rows = [
+        {
+            "ID": item["id"],
+            "Clave": item.get("clave"),
+            "Nombre": item.get("nombre"),
+            "Tipo": next(
+                (name for name, code in type_options.items() if code == item.get("tipo_codigo")),
+                item.get("tipo_codigo"),
+            ),
+            "Moneda": item.get("moneda_base"),
+            "Dirección": item.get("direccion"),
+            "RFC": item.get("rfc"),
+            "Estado": "Activo" if item.get("activo") else "Inactivo",
+        }
+        for item in filtered
+    ]
+    st.caption(f"{len(grid_rows)} inmueble(s) encontrado(s). Selecciona una fila para gestionarla.")
+    grid_event = st.dataframe(
+        pd.DataFrame(grid_rows),
+        hide_index=True,
+        use_container_width=True,
+        column_config={"ID": None},
+        on_select="rerun",
+        selection_mode="single-row",
+        key="property_management_grid",
+    )
+
+    selected_rows = list(getattr(getattr(grid_event, "selection", None), "rows", []) or [])
+    if selected_rows:
+        selected_index = selected_rows[0]
+        if 0 <= selected_index < len(filtered):
+            newly_selected_id = filtered[selected_index]["id"]
+            st.session_state.inmueble_gestion_id = newly_selected_id
+            # Grid -> Sidebar/global context: keep both selectors synchronized.
+            if st.session_state.get("condominio_id") != newly_selected_id:
+                st.session_state.condominio_id = newly_selected_id
+                refresh_current_property(newly_selected_id)
+                st.rerun()
+
+    all_by_id = {item["id"]: item for item in rows}
+    selected_id = st.session_state.get("inmueble_gestion_id")
+    if selected_id not in all_by_id:
+        selected_id = None
+        st.session_state.pop("inmueble_gestion_id", None)
+        st.session_state.pop("condominio_id", None)
+        st.session_state.pop("condominio", None)
+    selected_row = all_by_id.get(selected_id)
+
+    if selected_row:
+        visible_in_filter = any(item["id"] == selected_id for item in filtered)
+        st.success(f"Gestionando: {selected_row['clave']} · {selected_row['nombre']}")
+        if not visible_in_filter:
+            st.warning("El inmueble seleccionado no se encuentra dentro de los resultados del filtro. La selección se conserva para evitar cambiar de registro silenciosamente.")
+
+    labels = {f"{item['clave']} - {item['nombre']}": item for item in rows}
+    tabs = st.tabs(["Alta", "Datos Generales", "Administradores", "Identidad", "Estado", "Eliminar"])
+    if not selected_row:
+        st.info("No hay un inmueble activo. Selecciona una fila del grid para habilitar su gestión en el resto del sistema.")
+
+    with tabs[0]:
+        access = decision(user, "INMUEBLE_CREAR")
+        if not access.allowed:
+            denied_message("INMUEBLE_CREAR")
+        else:
+            with st.form("new"):
+                values = form(key="n")
+                submitted = st.form_submit_button("Crear Inmueble", type="primary")
+            if submitted:
+                if not values["clave"] or not values["nombre"]:
+                    st.error("Clave Y Nombre Son Obligatorios.")
+                else:
+                    try:
+                        record = execute(
+                            "INSERT INTO condominios(clave,nombre,tipo_codigo,direccion,rfc,moneda_base,zona_horaria) VALUES(%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                            (
+                                values["clave"], values["nombre"], values["tipo_codigo"],
+                                values["direccion"], values["rfc"], values["moneda_base"], values["zona_horaria"],
+                            ),
+                            True,
+                        )
+                        audit("INMUEBLE_CREAR", "condominios", record["id"], after=values)
+                        st.success("Inmueble creado correctamente.")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"No fue posible crear el inmueble. Verifica que la clave no esté duplicada. Detalle: {exc}")
+
+    if not labels:
+        return
+
+    with tabs[1]:
+        row = selected_row
+        if row is None:
+            st.info("Selecciona primero un inmueble en el grid superior.")
+            st.stop()
+        property_header(row)
+        access = decision(user, "INMUEBLE_MODIFICAR", row["id"])
+        if not access.allowed:
+            denied_message("INMUEBLE_MODIFICAR")
+        else:
+            with st.form(f"edit_{row['id']}"):
+                values = form(row, f"e_{row['id']}")
+                submitted = st.form_submit_button("Guardar Cambios", type="primary")
+            if submitted:
+                try:
+                    execute(
+                        "UPDATE condominios SET clave=%s,nombre=%s,tipo_codigo=%s,moneda_base=%s,direccion=%s,rfc=%s,zona_horaria=%s,actualizado_en=NOW() WHERE id=%s",
+                        (
+                            values["clave"], values["nombre"], values["tipo_codigo"], values["moneda_base"],
+                            values["direccion"], values["rfc"], values["zona_horaria"], row["id"],
+                        ),
+                    )
+                    audit("INMUEBLE_MODIFICAR", "condominios", row["id"], before=row, after=values)
+                    st.success("Cambios guardados correctamente.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"No fue posible guardar los cambios. Detalle: {exc}")
+
+    with tabs[2]:
+        row = selected_row
+
+        if row is None:
+            st.info("Selecciona primero un inmueble en el grid superior.")
+            st.stop()
+
+        access = decision(user, "ADMINISTRADOR_ASIGNAR", row["id"])
+
+        if not access.allowed:
+            denied_message("ADMINISTRADOR_ASIGNAR")
+
+        else:
+            admins = list_admins(row["id"])
+
+            table(
+                admins,
+                "usuarios",
+                [
+                    "username",
+                    "nombre",
+                    "email",
+                    "telefono_of_casa",
+                    "telefono_celular",
+                    "origen_codigo",
+                    "rol_codigo",
+                    "activo",
+                    "asignacion_activa",
+                ],
+            )
+
+            # ==================================================
+            # SELECTOR MAESTRO DE ADMINISTRADOR
+            # ==================================================
+
+            if admins:
+
+                st.subheader("Gestionar Administrador")
+
+                admin_labels = {
+                    f"{a['nombre']} · {a['username']}": a
+                    for a in admins
+                }
+
+                selected_admin_label = st.selectbox(
+                    "Administrador",
+                    list(admin_labels),
+                    key=f"admin_master_{row['id']}",
+                )
+
+                selected_admin_ref = admin_labels[selected_admin_label]
+
+                admin = get_admin(
+                    selected_admin_ref["id"]
+                )
+
+                # ==============================================
+                # DATOS DEL ADMINISTRADOR
+                # ==============================================
+
+                st.markdown("#### Datos Del Administrador")
+
+                origin_options = options("ORIGEN_ADMIN")
+
+                origin_reverse = {
+                    value: name
+                    for name, value in origin_options.items()
+                }
+
+                with st.form(
+                    f"admin_profile_{row['id']}_{admin['id']}"
+                ):
+
+                    c1, c2 = st.columns(2)
+
+                    admin_username = c1.text_input(
+                        "Usuario",
+                        admin.get("username") or "",
+                    )
+
+                    admin_nombre = c2.text_input(
+                        "Nombre",
+                        admin.get("nombre") or "",
+                    )
+
+                    admin_email = st.text_input(
+                        "Correo Electrónico",
+                        admin.get("email") or "",
+                    )
+
+                    c1, c2 = st.columns(2)
+
+                    tel_of = c1.text_input(
+                        "Tel. Of / Casa",
+                        admin.get("telefono_of_casa") or "",
+                    )
+
+                    tel_cel = c2.text_input(
+                        "Tel. Celular",
+                        admin.get("telefono_celular") or "",
+                    )
+
+                    admin_direccion = st.text_area(
+                        "Dirección",
+                        admin.get("direccion") or "",
+                    )
+
+                    origin_names = (
+                        list(origin_options)
+                        or ["Empresa", "Inquilino", "Privado"]
+                    )
+
+                    current_origin = origin_reverse.get(
+                        admin.get("origen_codigo"),
+                        origin_names[0],
+                    )
+
+                    origin_name = st.selectbox(
+                        "Origen",
+                        origin_names,
+                        index=origin_names.index(current_origin),
+                    )
+
+                    save_admin = st.form_submit_button(
+                        "Guardar Datos Del Administrador",
+                        type="primary",
+                    )
+
+                if save_admin:
+
+                    if not admin_username.strip():
+                        st.error("Usuario es obligatorio.")
+
+                    elif not admin_nombre.strip():
+                        st.error("Nombre es obligatorio.")
+
+                    else:
+
+                        try:
+
+                            origin_code = origin_options.get(
+                                origin_name,
+                                origin_name.upper(),
+                            )
+
+                            before = {
+                                k: admin.get(k)
+                                for k in (
+                                    "username",
+                                    "nombre",
+                                    "email",
+                                    "telefono_of_casa",
+                                    "telefono_celular",
+                                    "direccion",
+                                    "origen_codigo",
+                                )
+                            }
+
+                            update_admin_profile(
+                                admin["id"],
+                                admin_username.strip(),
+                                admin_nombre.strip(),
+                                admin_email.strip(),
+                                tel_of.strip(),
+                                tel_cel.strip(),
+                                admin_direccion.strip(),
+                                origin_code,
+                            )
+
+                            audit(
+                                "ADMINISTRADOR_MODIFICAR",
+                                "usuarios",
+                                admin["id"],
+                                before=before,
+                                after={
+                                    "username": admin_username.strip(),
+                                    "nombre": admin_nombre.strip(),
+                                    "email": admin_email.strip(),
+                                    "telefono_of_casa": tel_of.strip(),
+                                    "telefono_celular": tel_cel.strip(),
+                                    "direccion": admin_direccion.strip(),
+                                    "origen_codigo": origin_code,
+                                },
+                            )
+
+                            st.success(
+                                "Datos del administrador actualizados correctamente."
+                            )
+
+                            st.rerun()
+
+                        except Exception as exc:
+
+                            st.error(
+                                "No fue posible actualizar el administrador. "
+                                "Verifica que el Usuario no esté duplicado. "
+                                f"Detalle: {exc}"
+                            )
+
+                # ==============================================
+                # ACCESO DEL MISMO ADMINISTRADOR
+                # ==============================================
+
+                st.markdown("#### Acceso Del Administrador")
+
+                st.caption(
+                    f"Las siguientes acciones aplican a "
+                    f"{admin['nombre']} · {admin['username']}"
+                )
+
+                c1, c2, c3 = st.columns(
+                    [1, 1, 1.5]
+                )
+
+                if c1.button(
+                    "Revocar Del Inmueble",
+                    key=f"revoke_{row['id']}_{admin['id']}",
+                ):
+
+                    revoke(
+                        row["id"],
+                        admin["id"],
+                        user["id"],
+                    )
+
+                    audit(
+                        "ADMINISTRADOR_REVOCAR",
+                        "usuarios",
+                        admin["id"],
+                        detail=f"Inmueble {row['id']}",
+                    )
+
+                    st.rerun()
+
+                if c2.button(
+                    "Reactivar Asignación",
+                    key=f"reactivate_{row['id']}_{admin['id']}",
+                ):
+
+                    reactivate(
+                        row["id"],
+                        admin["id"],
+                        user["id"],
+                    )
+
+                    audit(
+                        "ADMINISTRADOR_REACTIVAR",
+                        "usuarios",
+                        admin["id"],
+                        detail=f"Inmueble {row['id']}",
+                    )
+
+                    st.rerun()
+
+                with c3:
+
+                    new_password = st.text_input(
+                        "Nueva Contraseña",
+                        type="password",
+                        key=f"pwd_{row['id']}_{admin['id']}",
+                    )
+
+                    if st.button(
+                        "Restablecer",
+                        key=f"resetpwd_{row['id']}_{admin['id']}",
+                    ):
+
+                        try:
+
+                            reset_password(
+                                admin["id"],
+                                new_password,
+                            )
+
+                            audit(
+                                "ADMINISTRADOR_PASSWORD_RESET",
+                                "usuarios",
+                                admin["id"],
+                            )
+
+                            st.success(
+                                "Contraseña restablecida correctamente."
+                            )
+
+                            st.rerun()
+
+                        except ValueError:
+
+                            st.error(
+                                "La contraseña no cumple la política de seguridad. "
+                                "Usa al menos 10 caracteres, una letra mayúscula y un número."
+                            )
+
+            else:
+
+                st.info(
+                    "Este inmueble no tiene administradores asignados."
+                )
+
+            # ==================================================
+            # NUEVO ADMINISTRADOR
+            # ==================================================
+
+            with st.expander("Nuevo Administrador"):
+
+                st.caption(
+                    "La contraseña debe tener al menos 10 caracteres, "
+                    "una mayúscula y un número."
+                )
+
+                with st.form(
+                    f"newadmin_{row['id']}"
+                ):
+
+                    nombre = st.text_input(
+                        "Nombre",
+                        key=f"newadmin_nombre_{row['id']}",
+                    )
+
+                    email = st.text_input(
+                        "Correo Electrónico",
+                        key=f"newadmin_email_{row['id']}",
+                    )
+
+                    username = st.text_input(
+                        "Usuario",
+                        key=f"newadmin_username_{row['id']}",
+                    )
+
+                    password = st.text_input(
+                        "Contraseña Inicial",
+                        type="password",
+                        key=f"newadmin_password_{row['id']}",
+                    )
+
+                    submitted = st.form_submit_button(
+                        "Crear Y Asignar"
+                    )
+
+                if submitted:
+
+                    if (
+                        not nombre
+                        or not email
+                        or not username
+                        or not password
+                    ):
+
+                        st.error(
+                            "Nombre, correo, usuario y contraseña "
+                            "son obligatorios."
+                        )
+
+                    else:
+
+                        try:
+
+                            create_admin(
+                                row["id"],
+                                nombre,
+                                email,
+                                username,
+                                password,
+                                user["id"],
+                            )
+
+                            audit(
+                                "ADMINISTRADOR_CREAR",
+                                "usuarios",
+                                detail=(
+                                    f"Inmueble {row['id']} · {username}"
+                                ),
+                            )
+
+                            st.success(
+                                "Administrador creado y asignado correctamente."
+                            )
+
+                            st.rerun()
+
+                        except ValueError:
+
+                            st.error(
+                                "La contraseña no cumple la política de seguridad. "
+                                "Usa al menos 10 caracteres, una letra mayúscula y un número."
+                            )
+
+                        except Exception as exc:
+
+                            st.error(
+                                "No fue posible crear el administrador. "
+                                f"Detalle: {exc}"
+                            )
+
+    with tabs[3]:
+        row = selected_row
+        if row is None:
+            st.info("Selecciona primero un inmueble en el grid superior.")
+            st.stop()
+        property_header(row)
+        access = decision(user, "INMUEBLE_BRANDING", row["id"])
+        if not access.allowed:
+            denied_message("INMUEBLE_BRANDING")
+        else:
+            st.subheader("Logotipo")
+            if row.get("logo_data"):
+                clickable_image(row["logo_data"], row.get("logo_mime") or "image/png", f"Logotipo - {row['nombre']}", width=140, max_height=100)
+            logo = st.file_uploader("Nuevo Logotipo", type=["jpg", "jpeg", "png", "bmp"], key="property_logo")
+            c1, c2 = st.columns(2)
+            if c1.button("Guardar / Cambiar Logotipo", disabled=logo is None):
+                try:
+                    media = validate(logo, 2)
+                    action = "INMUEBLE_LOGO_CAMBIO" if row.get("logo_data") else "INMUEBLE_LOGO_ALTA"
+                    update_logo(row["id"], media["data"], media["mime"])
+                    audit(action, "condominios", row["id"], after={"mime": media["mime"], "name": media["name"]})
+                    refresh_current_property(row["id"])
+                    st.rerun()
+                except ValueError as exc:
+                    st.error(str(exc))
+            delete_logo_confirm = c2.checkbox("Confirmo eliminar logotipo", key="delete_logo_confirm")
+            if c2.button("Eliminar Logotipo", disabled=not (delete_logo_confirm and row.get("logo_data"))):
+                delete_logo(row["id"]);audit("INMUEBLE_LOGO_BAJA", "condominios", row["id"]);refresh_current_property(row["id"]);st.rerun()
+            st.divider()
+            st.subheader("Portada / Imagen De Identidad")
+            if row.get("portada_data"):
+                clickable_image(row["portada_data"], row.get("portada_mime") or "image/jpeg", f"Portada - {row['nombre']}", width=220, max_height=125)
+            cover = st.file_uploader("Nueva Portada", type=["jpg", "jpeg", "png", "bmp"], key="property_cover")
+            c1, c2 = st.columns(2)
+            if c1.button("Guardar / Cambiar Portada", disabled=cover is None):
+                try:
+                    media = validate(cover, 5)
+                    action = "INMUEBLE_PORTADA_CAMBIO" if row.get("portada_data") else "INMUEBLE_PORTADA_ALTA"
+                    update_cover(row["id"], media["data"], media["mime"])
+                    audit(action, "condominios", row["id"], after={"mime": media["mime"], "name": media["name"]})
+                    refresh_current_property(row["id"])
+                    st.rerun()
+                except ValueError as exc:
+                    st.error(str(exc))
+            delete_cover_confirm = c2.checkbox("Confirmo eliminar portada", key="delete_cover_confirm")
+            if c2.button("Eliminar Portada", disabled=not (delete_cover_confirm and row.get("portada_data"))):
+                delete_cover(row["id"]);audit("INMUEBLE_PORTADA_BAJA", "condominios", row["id"]);refresh_current_property(row["id"]);st.rerun()
+
+    with tabs[4]:
+        row = selected_row
+        if row is None:
+            st.info("Selecciona primero un inmueble en el grid superior.")
+            st.stop()
+        permission = "INMUEBLE_DESACTIVAR" if row["activo"] else "INMUEBLE_REACTIVAR"
+        access = decision(user, permission, row["id"])
+        if not access.allowed:
+            denied_message(permission)
+        else:
+            action = "Desactivar" if row["activo"] else "Reactivar"
+            confirm = st.checkbox("Confirmo " + action)
+            if st.button(action, disabled=not confirm):
+                execute("UPDATE condominios SET activo=NOT activo WHERE id=%s", (row["id"],))
+                audit(permission, "condominios", row["id"])
+                st.rerun()
+
+    with tabs[5]:
+        row = selected_row
+        if row is None:
+            st.info("Selecciona primero un inmueble en el grid superior.")
+            st.stop()
+        access = decision(user, "INMUEBLE_ELIMINAR", row["id"])
+        if not access.allowed:
+            denied_message("INMUEBLE_ELIMINAR")
+        else:
+            deps = dependencies(row["id"])
+            st.write("Dependencias", deps)
+            if deletable(row["id"]):
+                confirm = st.checkbox("Confirmo La Eliminación Permanente")
+                if st.button("Eliminar Inmueble", disabled=not confirm):
+                    audit("INMUEBLE_ELIMINAR", "condominios", row["id"], before=row)
+                    execute("DELETE FROM condominios WHERE id=%s", (row["id"],))
+                    st.rerun()
+            else:
+                st.warning("Este Inmueble Tiene Registros Relacionados. Utiliza Desactivar.")

@@ -1,5 +1,13 @@
 from core.db import fetch_all,fetch_one
-REQUIRED={'usuarios':['rol_global','activo'],'usuario_inmuebles':['rol_codigo','asignado_por','revocado_en'],'condominios':['logo_data','portada_data'],'roles':['codigo'],'permisos':['codigo']}
+REQUIRED={
+ 'usuarios':['rol_global','activo','telefono_of_casa','telefono_celular','direccion','origen_codigo'],
+ 'usuario_inmuebles':['rol_codigo','asignado_por','revocado_en'],
+ 'condominios':['logo_data','portada_data'],
+ 'roles':['codigo'],
+ 'permisos':['codigo'],
+ 'configuracion_sistema':['clave','valor','tipo','actualizado_en'],
+ 'identidad_sistema':['logo_data','logo_mime','actualizado_en'],
+}
 def check():
  issues=[]
  for table,cols in REQUIRED.items():

@@ -2,7 +2,7 @@ import ast,importlib
 from pathlib import Path
 from core.formatting import labels,money
 from core.security import hash_password,verify_password,validate_password
-V=['views.portafolio','views.dashboard','views.inmuebles','views.espacios','views.personas','views.usuarios','views.catalogos','views.auditoria']
+V=['views.portafolio','views.dashboard','views.inmuebles','views.espacios','views.personas','views.usuarios','views.finanzas','views.catalogos','views.configuracion','views.auditoria']
 def test_01_syntax():
  for p in Path('.').rglob('*.py'):
   if '.venv' not in p.parts:ast.parse(p.read_text())
@@ -84,4 +84,4 @@ def test_57_root_audit():assert 'SUPERADMIN_BOOTSTRAP' in Path('core/auth.py').r
 def test_58_property_permission_enforcement():
     assert 'decision(user' in Path('views/inmuebles.py').read_text(encoding='utf-8')
 def test_59_no_fake_data():assert 'Aún No Hay Información Suficiente' in Path('views/dashboard.py').read_text()
-def test_60_build_revision():assert 'build.01-r2' in Path('core/config.py').read_text()
+def test_60_build_revision():assert 'build.01-r3' in Path('core/config.py').read_text()
