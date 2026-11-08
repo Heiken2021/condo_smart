@@ -1,6 +1,6 @@
 from core.db import fetch_all,fetch_one
 REQUIRED={
- 'usuarios':['rol_global','activo'],
+ 'usuarios':['rol_global','activo','telefono_of_casa','telefono_celular','direccion','origen_codigo'],
  'usuario_inmuebles':['rol_codigo','asignado_por','revocado_en'],
  'condominios':['logo_data','portada_data'],
  'roles':['codigo'],

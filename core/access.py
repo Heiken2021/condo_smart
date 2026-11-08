@@ -24,14 +24,32 @@ def select_property(user):
     rows = authorized_properties(user)
     if not rows:
         st.sidebar.warning('Sin Inmuebles Asignados')
+        st.session_state.pop('condominio_id', None)
+        st.session_state.pop('condominio', None)
+        st.session_state.pop('inmueble_gestion_id', None)
         return None
-    names = {x['nombre']: x for x in rows}
-    if st.session_state.get('condominio_id') not in {x['id'] for x in rows}:
-        st.session_state.condominio_id = rows[0]['id']
-    current = next(x['nombre'] for x in rows if x['id'] == st.session_state.condominio_id)
-    name = st.sidebar.selectbox('Inmueble Activo', list(names), index=list(names).index(current))
-    st.session_state.condominio_id = names[name]['id']
-    st.session_state.condominio = dict(names[name])
+
+    allowed_ids = {x['id'] for x in rows}
+    selected_id = st.session_state.get('condominio_id')
+
+    # Never choose a property by default. The active context only exists after
+    # the user selects a row in Inmuebles.
+    if selected_id not in allowed_ids:
+        st.session_state.pop('condominio_id', None)
+        st.session_state.pop('condominio', None)
+        # Keep inmueble_gestion_id: an offline property must remain manageable
+        # from Inmuebles so it can be reactivated.
+        st.sidebar.caption('Inmueble Activo')
+        st.sidebar.markdown('''<div style="background:#EEF3F7;color:#61758A;border-radius:11px;padding:12px 14px;font-weight:700;margin:4px 0 10px 0;">Ninguno seleccionado</div>''', unsafe_allow_html=True)
+        st.sidebar.caption('Selecciona un inmueble desde la sección Inmuebles.')
+        return None
+
+    current = next(x for x in rows if x['id'] == selected_id)
+    st.session_state.condominio_id = current['id']
+    st.session_state.condominio = dict(current)
+    st.session_state.inmueble_gestion_id = current['id']
+    st.sidebar.caption('Inmueble Activo')
+    st.sidebar.markdown(f'''<div style="background:#D9F5E5;color:#087D45;border-radius:11px;padding:12px 14px;font-weight:800;margin:4px 0 10px 0;">{current['nombre']}</div>''', unsafe_allow_html=True)
     return st.session_state.condominio
 
 def cid():

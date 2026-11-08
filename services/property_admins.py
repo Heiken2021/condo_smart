@@ -9,3 +9,13 @@ def reactivate(pid,uid,actor):execute('UPDATE usuario_inmuebles SET activo=TRUE,
 def reset_password(uid,password):
  if not validate_password(password):raise ValueError('Contraseña insegura')
  s,h=hash_password(password);execute('UPDATE usuarios SET salt=%s,password_hash=%s,debe_cambiar_password=TRUE WHERE id=%s',(s,h,uid))
+
+
+def get_admin(user_id):
+    return fetch_one("SELECT * FROM usuarios WHERE id=%s", (user_id,))
+
+def update_admin_profile(user_id,username,nombre,email,telefono_of_casa,telefono_celular,direccion,origen_codigo):
+    execute(
+        "UPDATE usuarios SET username=%s,nombre=%s,email=%s,telefono_of_casa=%s,telefono_celular=%s,direccion=%s,origen_codigo=%s,actualizado_en=NOW() WHERE id=%s",
+        (username,nombre,email,telefono_of_casa,telefono_celular,direccion,origen_codigo,user_id),
+    )

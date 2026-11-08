@@ -37,3 +37,6 @@ R2_SOURCE_FOR_R3.txt
 
 # Local R3 patch backups
 .r3-backup-*/
+
+# Local R3.1 backups
+.r3-1-backup-*/

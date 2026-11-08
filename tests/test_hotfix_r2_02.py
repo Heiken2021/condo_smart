@@ -14,9 +14,9 @@ def test_property_logo_is_discrete():
 
 
 def test_identity_images_are_clickable():
-    assert 'target="_blank"' in UI
+    assert 'showModal()' in UI
     assert 'cursor:zoom-in' in UI
 
 
-def test_identity_full_size_instruction_exists():
-    assert 'Haz clic en la imagen para verla en tamaño completo.' in UI
+def test_identity_full_size_dialog_exists():
+    assert '<dialog id="dlg">' in UI
