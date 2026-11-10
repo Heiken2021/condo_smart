@@ -24,28 +24,42 @@ def image_uri(data,mime='image/png'): return 'data:'+(mime or 'image/png')+';bas
 def logo(data,mime='image/png',max_width=320,max_height=None,alt='Condo-Smart'):
     if not data:return
     mh=f'max-height:{int(max_height)}px;' if max_height else ''
-    st.markdown(f'<div class="cs-logo"><img src="{image_uri(data,mime)}" alt="{html.escape(alt)}" style="max-width:min(100%,{int(max_width)}px);width:auto;height:auto;{mh}object-fit:contain"/></div>',unsafe_allow_html=True)
+    st.markdown(f'<div class="cs-logo"><img src="{image_uri(data,mime)}" alt="{html.escape(alt)}" style="width:min(100%,{int(max_width)}px);max-width:none;height:auto;{mh}object-fit:contain"/></div>',unsafe_allow_html=True)
+def _layout_settings():
+    try:
+        from services.system_settings import get_setting
+        width=int(get_setting('SYSTEM_LOGO_WIDTH','180'))
+        height=int(get_setting('SYSTEM_LOGO_MAX_HEIGHT','110'))
+        logo_y=int(get_setting('SYSTEM_LOGO_OFFSET_Y','-10'))
+        menu_y=int(get_setting('SYSTEM_MENU_OFFSET_Y','-8'))
+    except Exception:
+        width,height,logo_y,menu_y=180,110,-10,-8
+    return max(80,min(width,420)),max(60,min(height,320)),max(-80,min(logo_y,80)),max(-80,min(menu_y,80))
+
 def inject_theme():
-    st.markdown('''<style>
-    :root{--cs-navy:#082F5B;--cs-blue:#0878C9;--cs-cyan:#22C8C8;--cs-green:#20AA58;--cs-green-light:#54D65C;--cs-surface:#F4F8FB;--cs-text:#16324F;--cs-white:#FFF;--cs-radius:18px;--cs-shadow:0 16px 50px rgba(8,47,91,.12)}
-    html,body,[class*="css"]{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--cs-text)}
-    .stApp{background:linear-gradient(145deg,#f7fbfe 0%,#edf7f7 55%,#f7fbf7 100%)}
-    [data-testid="stSidebar"]{background:rgba(255,255,255,.97);border-right:1px solid #dce8ef}
-    [data-testid="stSidebar"] [data-testid="stImage"] img{object-fit:contain!important;height:auto!important}
-    .cs-logo{text-align:center;margin:.25rem auto 1rem}.cs-logo img{display:block;margin:auto}
-    .cs-login-title{text-align:center;color:var(--cs-navy);font-size:2rem;font-weight:800;margin:.25rem 0 0}.cs-login-sub{text-align:center;color:#61758a;margin:0 0 1rem}
-    .cs-login-foot{text-align:center;color:#6d8295;font-size:.82rem;margin-top:1rem}.cs-login-foot b{color:var(--cs-navy)}
-    .stButton>button,.stFormSubmitButton>button{border-radius:12px;border:0;font-weight:700}
-    .stFormSubmitButton>button[kind="primary"]{background:linear-gradient(90deg,var(--cs-blue),var(--cs-green));color:white}
-    [data-testid="stTextInputRootElement"]{border-radius:12px}
-    .cs-nav a{display:flex;align-items:center;gap:12px;padding:10px 12px;margin:3px 0;border-radius:11px;color:#344f69;text-decoration:none;font-weight:550}.cs-nav a:hover{background:#eef7fb}.cs-nav a.active{background:linear-gradient(90deg,#e9f4ff,#edf9f2);color:var(--cs-blue);font-weight:750}.cs-nav img{width:23px;height:23px}
-    .cs-user{border-top:1px solid #dbe6ed;margin-top:12px;padding:12px 6px;color:var(--cs-navy)}
-    .cs-native-icon{height:38px;display:flex;align-items:center;justify-content:center}.cs-native-icon svg{width:24px;height:24px;display:block}
-[data-testid="stSidebar"] .stButton>button{min-height:38px;text-align:left;justify-content:flex-start;padding:.35rem .6rem;border-radius:10px;box-shadow:none}
-[data-testid="stSidebar"] .stButton>button[kind="secondary"]{background:transparent;border-color:transparent;color:#344f69}
-[data-testid="stSidebar"] .stButton>button[kind="primary"]{background:linear-gradient(90deg,#e9f4ff,#edf9f2);border-color:transparent;color:#0878C9}
-.cs-nav-icon,.cs-native-icon{width:34px;height:42px;display:inline-flex;align-items:center;justify-content:center;flex:0 0 34px}.cs-nav-icon svg,.cs-native-icon svg{display:block;width:30px;height:30px;overflow:visible}
-.cs-designer-icon{width:58px!important;height:58px!important;object-fit:contain!important;object-position:center center!important;display:block!important;margin:0 auto!important;filter:none!important;border:0!important;background:transparent!important}
+    logo_width,logo_height,logo_y,menu_y=_layout_settings()
+    st.markdown(f'''<style>
+    :root{{--cs-navy:#082F5B;--cs-blue:#0878C9;--cs-cyan:#22C8C8;--cs-green:#20AA58;--cs-green-light:#54D65C;--cs-surface:#F4F8FB;--cs-text:#16324F;--cs-white:#FFF;--cs-radius:18px;--cs-shadow:0 16px 50px rgba(8,47,91,.12)}}
+    html,body,[class*="css"]{{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--cs-text)}}
+    .stApp{{background:linear-gradient(145deg,#f7fbfe 0%,#edf7f7 55%,#f7fbf7 100%)}}
+    [data-testid="stSidebar"]{{background:rgba(255,255,255,.97);border-right:1px solid #dce8ef}}
+    [data-testid="stSidebar"] [data-testid="stImage"] img{{object-fit:contain!important;height:auto!important}}
+    .cs-logo{{text-align:center;margin:{logo_y}px auto 1.15rem;width:100%}}.cs-logo img{{display:block;margin:auto;width:min(100%,{logo_width}px)!important;max-width:none!important;height:auto!important;max-height:{logo_height}px!important;object-fit:contain!important}}
+    .cs-login-title{{text-align:center;color:var(--cs-navy);font-size:2rem;font-weight:800;margin:.25rem 0 0}}.cs-login-sub{{text-align:center;color:#61758a;margin:0 0 1rem}}
+    .cs-login-foot{{text-align:center;color:#6d8295;font-size:.82rem;margin-top:1rem}}.cs-login-foot b{{color:var(--cs-navy)}}
+    .stButton>button,.stFormSubmitButton>button{{border-radius:12px;border:0;font-weight:700}}
+    .stFormSubmitButton>button[kind="primary"]{{background:linear-gradient(90deg,var(--cs-blue),var(--cs-green));color:white}}
+    [data-testid="stTextInputRootElement"]{{border-radius:12px}}
+    .cs-nav a{{display:flex;align-items:center;gap:12px;padding:10px 12px;margin:3px 0;border-radius:11px;color:#344f69;text-decoration:none;font-weight:550}}.cs-nav a:hover{{background:#eef7fb}}.cs-nav a.active{{background:linear-gradient(90deg,#e9f4ff,#edf9f2);color:var(--cs-blue);font-weight:750}}.cs-nav img{{width:23px;height:23px}}
+    .cs-user{{border-top:1px solid #dbe6ed;margin-top:12px;padding:12px 6px;color:var(--cs-navy)}}
+    .cs-native-icon{{height:38px;display:flex;align-items:center;justify-content:center}}.cs-native-icon svg{{width:24px;height:24px;display:block}}
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"]{{gap:.15rem}}
+[data-testid="stSidebar"] .stButton>button{{min-height:38px;text-align:left;justify-content:flex-start;padding:.35rem .6rem;border-radius:10px;box-shadow:none}}
+[data-testid="stSidebar"] .stButton>button[kind="secondary"]{{background:transparent;border-color:transparent;color:#344f69}}
+.cs-menu-offset{{margin-top:0!important}}
+[data-testid="stSidebar"] .stButton>button[kind="primary"]{{background:linear-gradient(90deg,#e9f4ff,#edf9f2);border-color:transparent;color:#0878C9}}
+.cs-nav-icon,.cs-native-icon{{width:34px;height:42px;display:inline-flex;align-items:center;justify-content:center;flex:0 0 34px}}.cs-nav-icon svg,.cs-native-icon svg{{display:block;width:30px;height:30px;overflow:visible}}
+.cs-designer-icon{{width:58px!important;height:58px!important;object-fit:contain!important;object-position:center center!important;display:block!important;margin:0 auto!important;filter:none!important;border:0!important;background:transparent!important}}
 </style>''',unsafe_allow_html=True)
 
 def menu_icon_uri(name):
@@ -56,6 +70,15 @@ def menu_icon_uri(name):
 
 def sidebar_nav(pages,current,user):
     selected=current
+    _,_,_,menu_y=_layout_settings()
+    # Separación real entre el inmueble activo y el menú.
+    # No desplazar el bloque vertical completo porque superpone ambos elementos.
+    menu_spacing = 24
+    st.sidebar.markdown(
+        f'<div class="cs-menu-offset" style="height:{menu_spacing}px;'
+        'min-height:14px;clear:both"></div>',
+        unsafe_allow_html=True,
+    )
     for label,key,module in pages:
         ci,ct=st.sidebar.columns([0.18,0.82],vertical_alignment="center")
         with ci:

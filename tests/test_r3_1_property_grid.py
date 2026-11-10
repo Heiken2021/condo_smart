@@ -17,10 +17,22 @@ def test_old_independent_selectors_removed():
     for key in ["gen", "admins", "brand", "state", "delete"]: assert f'key="{key}"' not in s
 
 def test_all_management_tabs_use_master_selected_row():
-    s=src(); assert s.count("row = selected_row") == 5
+    s=src(); assert s.count("row = selected_row") == 6
 
 def test_filter_does_not_silently_change_selection():
     s=src(); assert "La selección se conserva" in s
 
-def test_create_tab_remains_available():
-    s=src(); assert 'with tabs[0]:' in s and 'INMUEBLE_CREAR' in s
+def test_create_action_remains_available_and_is_independent():
+    s=src()
+    assert '"+ Alta De Inmueble"' in s
+    assert "property_create_mode" in s
+    assert 'INMUEBLE_CREAR' in s
+    assert 'if section == "Alta":' not in s
+
+def test_management_sections_are_lazy_loaded_after_selection():
+    s=src()
+    assert "st.tabs(" not in s
+    assert "if not selected_row:" in s
+    assert "return" in s
+    for name in ["Datos Generales", "Estructura", "Administradores", "Identidad", "Estado", "Eliminar"]:
+        assert f'if section == "{name}":' in s

@@ -1,12 +1,32 @@
 from pathlib import Path
 import hashlib
 import time
+from contextvars import ContextVar
 import streamlit as st
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 from core.config import database_url
 
 MIGRATION_LOCK = 728422012
+
+_query_stats = ContextVar("query_stats", default=None)
+
+
+def reset_query_stats():
+    _query_stats.set({"duration_ms": 0.0, "count": 0, "slowest_ms": 0.0})
+
+
+def query_stats():
+    return dict(_query_stats.get() or {"duration_ms": 0.0, "count": 0, "slowest_ms": 0.0})
+
+
+def _track_query(started):
+    elapsed=(time.perf_counter()-started)*1000
+    current=query_stats()
+    current["duration_ms"] += elapsed
+    current["count"] += 1
+    current["slowest_ms"] = max(current["slowest_ms"], elapsed)
+    _query_stats.set(current)
 
 @st.cache_resource
 def pool():
@@ -24,7 +44,11 @@ def pool():
 def execute(sql, params=(), returning=False):
     with pool().connection() as c:
         with c.cursor() as cur:
-            cur.execute(sql, params)
+            started=time.perf_counter()
+            try:
+                cur.execute(sql, params)
+            finally:
+                _track_query(started)
             row = cur.fetchone() if returning else None
         c.commit()
         return row
@@ -33,7 +57,11 @@ def execute(sql, params=(), returning=False):
 def fetch_all(sql, params=()):
     with pool().connection() as c:
         with c.cursor() as cur:
-            cur.execute(sql, params)
+            started=time.perf_counter()
+            try:
+                cur.execute(sql, params)
+            finally:
+                _track_query(started)
             return cur.fetchall()
 
 

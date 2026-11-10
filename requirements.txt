@@ -5,3 +5,4 @@ psycopg-pool>=3.3,<4
 Pillow>=11,<12
 plotly>=6,<7
 pytest>=8.3,<9
+openai>=3.49,<4

@@ -20,7 +20,8 @@ def test_edit_form_is_scoped_to_selected_property():
 
 def test_update_uses_selected_property_id():
     s = src()
-    assert 'values["zona_horaria"], row["id"]' in s
+    assert 'WHERE id=%s' in s
+    assert 'row["id"]' in s
 
 
 def test_audit_uses_selected_property_id():

@@ -34,4 +34,4 @@ def test_management_tabs_require_property_selection():
 
     assert s.count(
         "Selecciona primero un inmueble en el grid superior."
-    ) == 5
+    ) == 6

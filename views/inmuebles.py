@@ -1,3 +1,4 @@
+from datetime import date
 import streamlit as st
 import pandas as pd
 from core.db import execute
@@ -8,7 +9,8 @@ from components.ui import title, table, property_header, clickable_image
 from services.catalogs import options
 from services.media import validate
 from services.properties import list_properties, dependencies, deletable, update_logo, delete_logo, update_cover, delete_cover, get_property
-from services.property_admins import list_admins, create_admin, revoke, reactivate, reset_password, get_admin, update_admin_profile
+from services.property_admins import list_admins, create_admin, revoke, reactivate, reset_password, get_admin, update_admin_profile, list_assignable_admins, assign_existing_admin, admin_delete_dependencies, delete_inactive_admin
+from services.property_structure import NODE_TYPES, list_nodes, create_node, update_node, set_node_active, node_path, node_dependencies, delete_node
 
 
 def decision(user, permission, property_id=None):
@@ -22,9 +24,10 @@ def denied_message(permission):
 def form(row=None, key="p"):
     row = row or {}
     types = options("TIPO_INMUEBLE")
+    conditions = options("CONDICION_FISICA")
     reverse = {value: name for name, value in types.items()}
-    if not types:
-        st.error("No existen conceptos activos en el catálogo Tipo De Inmueble.")
+    if not types or not conditions:
+        st.error("Deben existir conceptos activos en Tipo De Inmueble y Condicion Fisica.")
         st.stop()
 
     col1, col2 = st.columns(2)
@@ -48,6 +51,29 @@ def form(row=None, key="p"):
         key=key + "m",
     )
 
+    construction_col, condition_col = st.columns(2)
+    construction_value = row.get("fecha_construccion") or date.today()
+    fecha_construccion = construction_col.date_input(
+        "Fecha De Construcción",
+        value=construction_value,
+        max_value=date.today(),
+        format="DD/MM/YYYY",
+        key=key + "fc",
+    )
+    condition_reverse = {value: name for name, value in conditions.items()}
+    condition_display = condition_reverse.get(row.get("condicion_codigo"), list(conditions)[0])
+    condition_name = condition_col.selectbox(
+        "Estado O Condición",
+        list(conditions),
+        index=list(conditions).index(condition_display),
+        key=key + "cf",
+    )
+    years = date.today().year - fecha_construccion.year - (
+        (date.today().month, date.today().day)
+        < (fecha_construccion.month, fecha_construccion.day)
+    )
+    st.caption(f"Antigüedad calculada: {years} año(s)")
+
     direccion = st.text_area("Dirección", row.get("direccion") or "", key=key + "d")
     col1, col2 = st.columns(2)
     rfc = col1.text_input("RFC", row.get("rfc") or "", key=key + "r")
@@ -64,13 +90,15 @@ def form(row=None, key="p"):
         "direccion": direccion,
         "rfc": rfc,
         "zona_horaria": zona,
+        "fecha_construccion": fecha_construccion,
+        "condicion_codigo": conditions[condition_name],
     }
 
 
 def render():
     user = st.session_state.user
     title("Inmuebles", "Datos Generales, Administradores, Identidad Y Estado")
-    rows = list_properties()
+    rows = list_properties(user)
     type_options = options("TIPO_INMUEBLE")
     friendly = []
     for item in rows:
@@ -126,6 +154,13 @@ def render():
             "Moneda": item.get("moneda_base"),
             "Dirección": item.get("direccion"),
             "RFC": item.get("rfc"),
+            "Fecha De Construcción": item.get("fecha_construccion"),
+            "Antigüedad": (
+                date.today().year - item["fecha_construccion"].year -
+                ((date.today().month, date.today().day) <
+                 (item["fecha_construccion"].month, item["fecha_construccion"].day))
+            ) if item.get("fecha_construccion") else None,
+            "Condición": item.get("condicion_codigo"),
             "Estado": "Activo" if item.get("activo") else "Inactivo",
         }
         for item in filtered
@@ -153,6 +188,7 @@ def render():
             if selected_property.get("activo"):
                 if st.session_state.get("condominio_id") != newly_selected_id:
                     st.session_state.condominio_id = newly_selected_id
+                    st.session_state.inmueble_gestion_id = newly_selected_id
                     refresh_current_property(newly_selected_id)
                     st.rerun()
             else:
@@ -176,11 +212,24 @@ def render():
             st.warning("El inmueble seleccionado no se encuentra dentro de los resultados del filtro. La selección se conserva para evitar cambiar de registro silenciosamente.")
 
     labels = {f"{item['clave']} - {item['nombre']}": item for item in rows}
-    tabs = st.tabs(["Alta", "Datos Generales", "Administradores", "Identidad", "Estado", "Eliminar"])
-    if not selected_row:
-        st.info("No hay un inmueble activo. Selecciona una fila del grid para habilitar su gestión en el resto del sistema.")
 
-    with tabs[0]:
+    if user.get("rol_global") == "SUPERADMIN":
+        action_col, spacer_col = st.columns([1.35, 8.65])
+        if action_col.button(
+            "+ Alta De Inmueble",
+            type="primary",
+            use_container_width=True,
+            key="property_create_open",
+        ):
+            st.session_state.property_create_mode = True
+    else:
+        st.session_state.property_create_mode = False
+
+    if st.session_state.get("property_create_mode"):
+        st.subheader("Alta De Inmueble")
+        if st.button("Cancelar Alta", key="property_create_cancel"):
+            st.session_state.property_create_mode = False
+            st.rerun()
         access = decision(user, "INMUEBLE_CREAR")
         if not access.allowed:
             denied_message("INMUEBLE_CREAR")
@@ -194,14 +243,16 @@ def render():
                 else:
                     try:
                         record = execute(
-                            "INSERT INTO condominios(clave,nombre,tipo_codigo,direccion,rfc,moneda_base,zona_horaria) VALUES(%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                            "INSERT INTO condominios(clave,nombre,tipo_codigo,direccion,rfc,moneda_base,zona_horaria,fecha_construccion,condicion_codigo) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
                             (
                                 values["clave"], values["nombre"], values["tipo_codigo"],
                                 values["direccion"], values["rfc"], values["moneda_base"], values["zona_horaria"],
+                                values["fecha_construccion"], values["condicion_codigo"],
                             ),
                             True,
                         )
                         audit("INMUEBLE_CREAR", "condominios", record["id"], after=values)
+                        st.session_state.property_create_mode = False
                         st.success("Inmueble creado correctamente.")
                         st.rerun()
                     except Exception as exc:
@@ -210,7 +261,24 @@ def render():
     if not labels:
         return
 
-    with tabs[1]:
+    if not selected_row:
+        if not st.session_state.get("property_create_mode"):
+            st.caption("Selecciona una fila del grid para mostrar las opciones de gestión del inmueble.")
+        return
+
+    if not st.session_state.get("property_create_mode"):
+        section_names = ["Datos Generales", "Estructura", "Administradores", "Identidad", "Áreas Comunes", "Planos", "Estado", "Eliminar"]
+        section = st.radio(
+            "Gestion Del Inmueble",
+            section_names,
+            horizontal=True,
+            key="property_management_section",
+            label_visibility="collapsed",
+        )
+    else:
+        return
+
+    if section == "Datos Generales":
         row = selected_row
         if row is None:
             st.info("Selecciona primero un inmueble en el grid superior.")
@@ -226,10 +294,11 @@ def render():
             if submitted:
                 try:
                     execute(
-                        "UPDATE condominios SET clave=%s,nombre=%s,tipo_codigo=%s,moneda_base=%s,direccion=%s,rfc=%s,zona_horaria=%s,actualizado_en=NOW() WHERE id=%s",
+                        "UPDATE condominios SET clave=%s,nombre=%s,tipo_codigo=%s,moneda_base=%s,direccion=%s,rfc=%s,zona_horaria=%s,fecha_construccion=%s,condicion_codigo=%s,actualizado_en=NOW() WHERE id=%s",
                         (
                             values["clave"], values["nombre"], values["tipo_codigo"], values["moneda_base"],
-                            values["direccion"], values["rfc"], values["zona_horaria"], row["id"],
+                            values["direccion"], values["rfc"], values["zona_horaria"],
+                            values["fecha_construccion"], values["condicion_codigo"], row["id"],
                         ),
                     )
                     audit("INMUEBLE_MODIFICAR", "condominios", row["id"], before=row, after=values)
@@ -238,7 +307,75 @@ def render():
                 except Exception as exc:
                     st.error(f"No fue posible guardar los cambios. Detalle: {exc}")
 
-    with tabs[2]:
+    if section == "Estructura":
+        row = selected_row
+        if row is None:
+            st.info("Selecciona primero un inmueble en el grid superior.")
+        else:
+            st.subheader("Estructura Del Inmueble")
+            nodes=list_nodes(row["id"])
+            grid_rows=[{"ID":n["id"],"Clave":n.get("clave") or "","Nombre":n.get("nombre"),"Tipo":n.get("tipo_codigo"),"Ubicación":node_path(nodes,n["id"]),"Descripción":n.get("descripcion") or "","Estado":"Activo" if n.get("activo") else "Inactivo"} for n in nodes]
+            if grid_rows:
+                event=st.dataframe(pd.DataFrame(grid_rows),hide_index=True,use_container_width=True,column_config={"ID":None},on_select="rerun",selection_mode="single-row",key=f"structure_management_grid_{row['id']}")
+                indexes=list(getattr(getattr(event,"selection",None),"rows",[]) or [])
+                selected_node=nodes[indexes[0]] if indexes and 0<=indexes[0]<len(nodes) else None
+            else:
+                selected_node=None; st.info("Este inmueble todavía no tiene estructuras registradas.")
+
+            type_labels={"Conjunto Urbano":"CONJUNTO_URBANO","Fraccionamiento":"FRACCIONAMIENTO","Privada":"PRIVADA","Edificio":"EDIFICIO","Torre":"TORRE","Sección":"SECCION","Zona":"ZONA"}
+            reverse_types={v:k for k,v in type_labels.items()}
+            if selected_node:
+                st.markdown("### Gestionar Estructura")
+                st.success(f"Gestionando: {node_path(nodes,selected_node['id'])}")
+                management=st.radio("Gestión",["Editar","Cambiar Estado","Eliminar"],horizontal=True,key=f"structure_action_{row['id']}_{selected_node['id']}",label_visibility="collapsed")
+                parent_candidates=[n for n in nodes if n["id"]!=selected_node["id"] and n.get("activo")]
+                parent_map={"Nivel raíz del inmueble":None}|{f"{node_path(nodes,n['id'])} · {n['tipo_codigo']}":n["id"] for n in parent_candidates}
+                if management=="Editar":
+                    access=decision(user,"ESTRUCTURA_MODIFICAR",row["id"])
+                    if not access.allowed: denied_message("ESTRUCTURA_MODIFICAR")
+                    else:
+                        current_type=reverse_types.get(selected_node["tipo_codigo"],list(type_labels)[0])
+                        current_parent=next((k for k,val in parent_map.items() if val==selected_node.get("parent_id")),"Nivel raíz del inmueble")
+                        with st.form(f"structure_edit_{selected_node['id']}"):
+                            c1,c2=st.columns(2)
+                            t=c1.selectbox("Tipo De Estructura",list(type_labels),index=list(type_labels).index(current_type))
+                            p=c2.selectbox("Estructura Padre",list(parent_map),index=list(parent_map).index(current_parent))
+                            clave=st.text_input("Clave",selected_node.get("clave") or "")
+                            nombre=st.text_input("Nombre",selected_node.get("nombre") or "")
+                            desc=st.text_area("Descripción",selected_node.get("descripcion") or "")
+                            save=st.form_submit_button("Guardar Cambios",type="primary")
+                        if save:
+                            if not nombre.strip(): st.error("El nombre es obligatorio.")
+                            else:
+                                update_node(row["id"],selected_node["id"],nombre.strip(),clave.strip() or None,desc.strip() or None,type_labels[t],parent_map[p]); audit("ESTRUCTURA_MODIFICAR","estructura_inmueble",selected_node["id"]); st.rerun()
+                elif management=="Cambiar Estado":
+                    target=not selected_node.get("activo"); permission="ESTRUCTURA_REACTIVAR" if target else "ESTRUCTURA_DESACTIVAR"
+                    if not decision(user,permission,row["id"]).allowed: denied_message(permission)
+                    elif st.button("Reactivar Estructura" if target else "Desactivar Estructura",type="primary"):
+                        set_node_active(row["id"],selected_node["id"],target); audit(permission,"estructura_inmueble",selected_node["id"]); st.rerun()
+                else:
+                    deps=node_dependencies(row["id"],selected_node["id"]) or {}
+                    st.write(f"Estructuras hijas: {deps.get('hijos',0)} · Espacios vinculados: {deps.get('espacios',0)}")
+                    can_delete=sum(deps.values())==0
+                    if not can_delete: st.warning("No se puede eliminar mientras existan estructuras hijas o espacios vinculados.")
+                    confirm=st.checkbox("Confirmo la eliminación permanente",disabled=not can_delete,key=f"structure_delete_confirm_{selected_node['id']}")
+                    if not decision(user,"ESTRUCTURA_ELIMINAR",row["id"]).allowed: denied_message("ESTRUCTURA_ELIMINAR")
+                    elif st.button("Eliminar Estructura",disabled=not(can_delete and confirm),type="primary"):
+                        if delete_node(row["id"],selected_node["id"]): audit("ESTRUCTURA_ELIMINAR","estructura_inmueble",selected_node["id"]); st.rerun()
+            else:
+                st.caption("Selecciona una fila del grid para editar, cambiar su estado o eliminarla.")
+
+            with st.expander("Agregar Estructura",expanded=not bool(nodes)):
+                if not decision(user,"ESTRUCTURA_CREAR",row["id"]).allowed: denied_message("ESTRUCTURA_CREAR")
+                else:
+                    parent_map={"Nivel raíz del inmueble":None}|{f"{node_path(nodes,n['id'])} · {n['tipo_codigo']}":n["id"] for n in nodes if n.get("activo")}
+                    with st.form(f"structure_add_{row['id']}"):
+                        c1,c2=st.columns(2); t=c1.selectbox("Tipo De Estructura",list(type_labels)); p=c2.selectbox("Estructura Padre",list(parent_map)); clave=st.text_input("Clave"); nombre=st.text_input("Nombre"); desc=st.text_area("Descripción"); add=st.form_submit_button("Agregar Estructura",type="primary")
+                    if add:
+                        if not nombre.strip(): st.error("El nombre es obligatorio.")
+                        else: create_node(row["id"],type_labels[t],nombre.strip(),clave.strip() or None,parent_map[p],desc.strip() or None); audit("ESTRUCTURA_CREAR","estructura_inmueble",detail=f"Inmueble {row['id']}"); st.rerun()
+
+    if section == "Administradores":
         row = selected_row
 
         if row is None:
@@ -469,8 +606,10 @@ def render():
                     [1, 1, 1.5]
                 )
 
+                revoke_access = decision(user, "ADMINISTRADOR_REVOCAR", row["id"])
                 if c1.button(
-                    "Revocar Del Inmueble",
+                    "Eliminar / Revocar Del Inmueble",
+                    disabled=not revoke_access.allowed,
                     key=f"revoke_{row['id']}_{admin['id']}",
                 ):
 
@@ -548,6 +687,58 @@ def render():
                                 "Usa al menos 10 caracteres, una letra mayúscula y un número."
                             )
 
+                # ==============================================
+                # ELIMINACION DEFINITIVA DE LA IDENTIDAD
+                # ==============================================
+                st.markdown("#### Eliminar Administrador De La Base De Datos")
+                delete_access = decision(user, "ADMINISTRADOR_ELIMINAR", row["id"])
+                delete_deps = admin_delete_dependencies(admin["id"]) or {}
+                active_assignments = int(delete_deps.get("asignaciones_activas", 0))
+                space_assignments = int(delete_deps.get("espacios", 0))
+                can_delete_identity = (
+                    delete_access.allowed
+                    and admin["id"] != user["id"]
+                    and admin.get("rol_global") != "SUPERADMIN"
+                    and active_assignments == 0
+                    and space_assignments == 0
+                )
+                st.caption(
+                    "Esta acción elimina definitivamente la cuenta, sus asignaciones históricas "
+                    "y sus códigos de recuperación. No puede deshacerse."
+                )
+                st.write(
+                    f"Asignaciones activas: {active_assignments} · "
+                    f"Asignaciones totales: {int(delete_deps.get('asignaciones_totales', 0))} · "
+                    f"Espacios asignados: {space_assignments}"
+                )
+                if not delete_access.allowed:
+                    denied_message("ADMINISTRADOR_ELIMINAR")
+                elif admin["id"] == user["id"]:
+                    st.warning("No puedes eliminar la cuenta con la que has iniciado sesión.")
+                elif admin.get("rol_global") == "SUPERADMIN":
+                    st.warning("No se puede eliminar una cuenta SuperAdmin desde este módulo.")
+                elif active_assignments:
+                    st.warning("Primero revoca al administrador de todos los inmuebles activos.")
+                elif space_assignments:
+                    st.warning("El administrador tiene espacios asignados y no puede eliminarse.")
+                confirmation = st.text_input(
+                    f"Escribe {admin['username']} para confirmar la eliminación definitiva",
+                    key=f"delete_admin_confirmation_{admin['id']}",
+                    disabled=not can_delete_identity,
+                )
+                if st.button(
+                    "Eliminar Administrador Definitivamente",
+                    type="primary",
+                    disabled=not (can_delete_identity and confirmation == admin["username"]),
+                    key=f"delete_admin_permanent_{admin['id']}",
+                ):
+                    before={"id":admin["id"],"username":admin["username"],"nombre":admin["nombre"],"email":admin.get("email")}
+                    delete_inactive_admin(admin["id"],user["id"])
+                    audit("ADMINISTRADOR_ELIMINAR","usuarios",admin["id"],before=before)
+                    st.session_state.pop("admin_gestion_id",None)
+                    st.success("Administrador eliminado definitivamente.")
+                    st.rerun()
+
             elif admins:
 
                 st.info(
@@ -560,6 +751,93 @@ def render():
                 st.info(
                     "Este inmueble no tiene administradores asignados."
                 )
+
+            # ==================================================
+            # ASIGNAR ADMINISTRADOR EXISTENTE
+            # ==================================================
+
+            with st.expander("Asignar Administrador Existente"):
+                assign_access = decision(
+                    user,
+                    "ADMINISTRADOR_ASIGNAR",
+                    row["id"],
+                )
+                if not assign_access.allowed:
+                    denied_message("ADMINISTRADOR_ASIGNAR")
+                else:
+                    candidates = list_assignable_admins(row["id"])
+                    if not candidates:
+                        st.info(
+                            "No hay administradores existentes disponibles "
+                            "para asignar a este inmueble."
+                        )
+                    else:
+                        candidate_map = {
+                            f"{item['nombre']} · {item['username']} · "
+                            f"{item.get('email') or 'Sin correo'}": item
+                            for item in candidates
+                        }
+                        selected_candidate = st.selectbox(
+                            "Administrador existente",
+                            list(candidate_map),
+                            key=f"existing_admin_{row['id']}",
+                        )
+                        candidate = candidate_map[selected_candidate]
+                        if candidate.get("asignacion_actual_activa") is False:
+                            st.caption(
+                                "La asignación anterior está revocada y será reactivada."
+                            )
+                        else:
+                            st.caption(
+                                "Se conservarán el mismo usuario, contraseña y perfil."
+                            )
+                        if st.button(
+                            "Asignar Al Inmueble",
+                            type="primary",
+                            key=f"assign_existing_admin_{row['id']}",
+                        ):
+                            try:
+                                result = assign_existing_admin(
+                                    row["id"],
+                                    candidate["id"],
+                                    user["id"],
+                                )
+                                action = (
+                                    "ADMINISTRADOR_REACTIVAR"
+                                    if result["status"] == "REACTIVATED"
+                                    else "ADMINISTRADOR_ASIGNAR"
+                                )
+                                audit(
+                                    action,
+                                    "usuario_inmuebles",
+                                    candidate["id"],
+                                    detail=f"Inmueble {row['id']}",
+                                    after={
+                                        "usuario_id": candidate["id"],
+                                        "condominio_id": row["id"],
+                                        "rol_codigo": "ADMINISTRADOR",
+                                        "status": result["status"],
+                                    },
+                                )
+                                if result["status"] == "ALREADY_ACTIVE":
+                                    st.info(
+                                        "El administrador ya tiene una asignación "
+                                        "activa en este inmueble."
+                                    )
+                                elif result["status"] == "REACTIVATED":
+                                    st.success(
+                                        "Asignación reactivada correctamente, sin "
+                                        "crear otra identidad."
+                                    )
+                                else:
+                                    st.success(
+                                        "Administrador existente asignado correctamente."
+                                    )
+                                st.rerun()
+                            except ValueError:
+                                st.error(
+                                    "La identidad seleccionada ya no está disponible."
+                                )
 
             # ==================================================
             # NUEVO ADMINISTRADOR
@@ -656,7 +934,7 @@ def render():
                                 f"Detalle: {exc}"
                             )
 
-    with tabs[3]:
+    if section == "Identidad":
         row = selected_row
         if row is None:
             st.info("Selecciona primero un inmueble en el grid superior.")
@@ -704,7 +982,15 @@ def render():
             if c2.button("Eliminar Portada", disabled=not (delete_cover_confirm and row.get("portada_data"))):
                 delete_cover(row["id"]);audit("INMUEBLE_PORTADA_BAJA", "condominios", row["id"]);refresh_current_property(row["id"]);st.rerun()
 
-    with tabs[4]:
+    if section == "Áreas Comunes":
+        st.subheader("Áreas Comunes")
+        st.info("Apartado estructural del inmueble. Funcionalidad operativa pendiente de asignación a un Build futuro.")
+
+    if section == "Planos":
+        st.subheader("Planos")
+        st.info("Apartado estructural del inmueble. Funcionalidad documental y gráfica pendiente de asignación a un Build futuro.")
+
+    if section == "Estado":
         row = selected_row
         if row is None:
             st.info("Selecciona primero un inmueble en el grid superior.")
@@ -763,7 +1049,7 @@ def render():
                 )
                 st.rerun()
 
-    with tabs[5]:
+    if section == "Eliminar":
         row = selected_row
         if row is None:
             st.info("Selecciona primero un inmueble en el grid superior.")

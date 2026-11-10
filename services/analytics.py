@@ -1,5 +1,8 @@
 from core.db import fetch_all,fetch_one
-def prop_rows():return fetch_all("SELECT c.id,c.clave,c.nombre,c.tipo_codigo,c.direccion,c.logo_data,c.portada_data,c.activo,COUNT(DISTINCT e.id) espacios,COUNT(DISTINCT CASE WHEN e.estado_codigo='OCUPADO' THEN e.id END) ocupados,COALESCE((SELECT SUM(x.monto_mxn) FROM cargos x WHERE x.condominio_id=c.id AND x.activo),0) cargos,COALESCE((SELECT SUM(p.monto_mxn) FROM pagos p WHERE p.condominio_id=c.id AND p.activo),0) pagos,COALESCE((SELECT COUNT(*) FROM usuario_inmuebles ui WHERE ui.condominio_id=c.id AND ui.activo AND ui.rol_codigo='ADMINISTRADOR'),0) administradores FROM condominios c LEFT JOIN espacios e ON e.condominio_id=c.id AND e.activo GROUP BY c.id ORDER BY c.nombre")
+def prop_rows(user):
+ base="SELECT c.id,c.clave,c.nombre,c.tipo_codigo,c.direccion,c.logo_data,c.portada_data,c.activo,COUNT(DISTINCT e.id) espacios,COUNT(DISTINCT CASE WHEN e.estado_codigo='OCUPADO' THEN e.id END) ocupados,COALESCE((SELECT SUM(x.monto_mxn) FROM cargos x WHERE x.condominio_id=c.id AND x.activo),0) cargos,COALESCE((SELECT SUM(p.monto_mxn) FROM pagos p WHERE p.condominio_id=c.id AND p.activo),0) pagos,COALESCE((SELECT COUNT(*) FROM usuario_inmuebles a WHERE a.condominio_id=c.id AND a.activo AND a.rol_codigo='ADMINISTRADOR'),0) administradores FROM condominios c LEFT JOIN espacios e ON e.condominio_id=c.id AND e.activo"
+ if user.get('rol_global')=='SUPERADMIN': return fetch_all(base+' GROUP BY c.id ORDER BY c.nombre')
+ return fetch_all(base+' JOIN usuario_inmuebles scope ON scope.condominio_id=c.id AND scope.usuario_id=%s AND scope.activo=TRUE GROUP BY c.id ORDER BY c.nombre',(user['id'],))
 def periods(pid=None):
  where='WHERE c.activo=TRUE';params=[]
  if pid:where+=' AND c.condominio_id=%s';params=[pid]
