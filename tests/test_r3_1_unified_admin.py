@@ -23,7 +23,7 @@ def test_old_admin_dropdown_removed():
 def test_grid_selection_drives_admin():
     s = source()
     assert 'admins[admin_index]["id"]' in s
-    assert "admin = get_admin(admin_id)" in s
+    assert 'admin = get_admin(row["id"], admin_id, user["id"])' in s
 
 def test_username_remains_editable():
     s = source()

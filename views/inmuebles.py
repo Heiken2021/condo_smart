@@ -441,7 +441,7 @@ def render():
 
                 st.subheader("Gestionar Administrador")
 
-                admin = get_admin(admin_id)
+                admin = get_admin(row["id"], admin_id, user["id"])
 
                 st.success(
                     f"Gestionando Administrador: "
@@ -551,6 +551,7 @@ def render():
                             }
 
                             update_admin_profile(
+                                row["id"],
                                 admin["id"],
                                 admin_username.strip(),
                                 admin_nombre.strip(),
@@ -559,6 +560,7 @@ def render():
                                 tel_cel.strip(),
                                 admin_direccion.strip(),
                                 origin_code,
+                                user["id"],
                             )
 
                             audit(
@@ -664,8 +666,10 @@ def render():
                         try:
 
                             reset_password(
+                                row["id"],
                                 admin["id"],
                                 new_password,
+                                user["id"],
                             )
 
                             audit(
@@ -765,7 +769,7 @@ def render():
                 if not assign_access.allowed:
                     denied_message("ADMINISTRADOR_ASIGNAR")
                 else:
-                    candidates = list_assignable_admins(row["id"])
+                    candidates = list_assignable_admins(row["id"], user["id"])
                     if not candidates:
                         st.info(
                             "No hay administradores existentes disponibles "
