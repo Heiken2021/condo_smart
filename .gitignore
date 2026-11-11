@@ -40,3 +40,7 @@ R2_SOURCE_FOR_R3.txt
 
 # Local R3.1 backups
 .r3-1-backup-*/
+
+# Informes y respaldos locales de auditoría
+*.before_security_fix_*
+security_reports/

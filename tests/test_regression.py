@@ -20,7 +20,7 @@ def test_11_audit_preserved():assert Path('views/auditoria.py').exists()
 def test_12_context_label():assert labels('condominios')['tipo_codigo']=='Tipo De Inmueble'
 def test_13_space_context_label():assert labels('espacios')['tipo_codigo']=='Tipo De Espacio'
 def test_14_internal_id_hidden():assert 'id' not in labels('condominios')
-def test_15_money():assert money(2500)=='$2,500.00 MXN'
+def test_15_money():assert money(2500, currency='MXN')=='$2,500.00 MXN'
 def test_16_password():
  s,h=hash_password('Seguro2026X');assert verify_password('Seguro2026X',s,h)
 def test_17_password_policy():assert validate_password('Seguro2026X')
