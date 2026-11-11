@@ -8,7 +8,7 @@ from core.authorization import authorize
 from components.ui import title, table, property_header, clickable_image
 from services.catalogs import options
 from services.media import validate
-from services.properties import list_properties, dependencies, deletable, update_logo, delete_logo, update_cover, delete_cover, get_property
+from services.properties import list_properties, create_property, update_property, dependencies, deletable, delete_property, update_logo, delete_logo, update_cover, delete_cover, set_property_active, get_property
 from services.property_admins import list_admins, create_admin, revoke, reactivate, reset_password, get_admin, update_admin_profile, list_assignable_admins, assign_existing_admin, admin_delete_dependencies, delete_inactive_admin
 from services.property_structure import NODE_TYPES, list_nodes, create_node, update_node, set_node_active, node_path, node_dependencies, delete_node
 
@@ -242,14 +242,9 @@ def render():
                     st.error("Clave Y Nombre Son Obligatorios.")
                 else:
                     try:
-                        record = execute(
-                            "INSERT INTO condominios(clave,nombre,tipo_codigo,direccion,rfc,moneda_base,zona_horaria,fecha_construccion,condicion_codigo) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
-                            (
-                                values["clave"], values["nombre"], values["tipo_codigo"],
-                                values["direccion"], values["rfc"], values["moneda_base"], values["zona_horaria"],
-                                values["fecha_construccion"], values["condicion_codigo"],
-                            ),
-                            True,
+                        record = create_property(
+                            user["id"],
+                            values,
                         )
                         audit("INMUEBLE_CREAR", "condominios", record["id"], after=values)
                         st.session_state.property_create_mode = False
@@ -293,13 +288,10 @@ def render():
                 submitted = st.form_submit_button("Guardar Cambios", type="primary")
             if submitted:
                 try:
-                    execute(
-                        "UPDATE condominios SET clave=%s,nombre=%s,tipo_codigo=%s,moneda_base=%s,direccion=%s,rfc=%s,zona_horaria=%s,fecha_construccion=%s,condicion_codigo=%s,actualizado_en=NOW() WHERE id=%s",
-                        (
-                            values["clave"], values["nombre"], values["tipo_codigo"], values["moneda_base"],
-                            values["direccion"], values["rfc"], values["zona_horaria"],
-                            values["fecha_construccion"], values["condicion_codigo"], row["id"],
-                        ),
+                    update_property(
+                        row["id"],
+                        values,
+                        user["id"],
                     )
                     audit("INMUEBLE_MODIFICAR", "condominios", row["id"], before=row, after=values)
                     st.success("Cambios guardados correctamente.")
@@ -957,7 +949,7 @@ def render():
                 try:
                     media = validate(logo, 2)
                     action = "INMUEBLE_LOGO_CAMBIO" if row.get("logo_data") else "INMUEBLE_LOGO_ALTA"
-                    update_logo(row["id"], media["data"], media["mime"])
+                    update_logo(row["id"], media["data"], media["mime"], user["id"])
                     audit(action, "condominios", row["id"], after={"mime": media["mime"], "name": media["name"]})
                     refresh_current_property(row["id"])
                     st.rerun()
@@ -965,7 +957,7 @@ def render():
                     st.error(str(exc))
             delete_logo_confirm = c2.checkbox("Confirmo eliminar logotipo", key="delete_logo_confirm")
             if c2.button("Eliminar Logotipo", disabled=not (delete_logo_confirm and row.get("logo_data"))):
-                delete_logo(row["id"]);audit("INMUEBLE_LOGO_BAJA", "condominios", row["id"]);refresh_current_property(row["id"]);st.rerun()
+                delete_logo(row["id"], user["id"]);audit("INMUEBLE_LOGO_BAJA", "condominios", row["id"]);refresh_current_property(row["id"]);st.rerun()
             st.divider()
             st.subheader("Portada / Imagen De Identidad")
             if row.get("portada_data"):
@@ -976,7 +968,7 @@ def render():
                 try:
                     media = validate(cover, 5)
                     action = "INMUEBLE_PORTADA_CAMBIO" if row.get("portada_data") else "INMUEBLE_PORTADA_ALTA"
-                    update_cover(row["id"], media["data"], media["mime"])
+                    update_cover(row["id"], media["data"], media["mime"], user["id"])
                     audit(action, "condominios", row["id"], after={"mime": media["mime"], "name": media["name"]})
                     refresh_current_property(row["id"])
                     st.rerun()
@@ -984,7 +976,7 @@ def render():
                     st.error(str(exc))
             delete_cover_confirm = c2.checkbox("Confirmo eliminar portada", key="delete_cover_confirm")
             if c2.button("Eliminar Portada", disabled=not (delete_cover_confirm and row.get("portada_data"))):
-                delete_cover(row["id"]);audit("INMUEBLE_PORTADA_BAJA", "condominios", row["id"]);refresh_current_property(row["id"]);st.rerun()
+                delete_cover(row["id"], user["id"]);audit("INMUEBLE_PORTADA_BAJA", "condominios", row["id"]);refresh_current_property(row["id"]);st.rerun()
 
     if section == "Áreas Comunes":
         st.subheader("Áreas Comunes")
@@ -1030,9 +1022,10 @@ def render():
                 key=f"change_state_{row['id']}_{int(target_state)}",
                 type="primary" if target_state else "secondary",
             ):
-                execute(
-                    "UPDATE condominios SET activo=%s,actualizado_en=NOW() WHERE id=%s",
-                    (target_state, row["id"]),
+                set_property_active(
+                    row["id"],
+                    target_state,
+                    user["id"],
                 )
                 audit(
                     permission,
@@ -1062,13 +1055,16 @@ def render():
         if not access.allowed:
             denied_message("INMUEBLE_ELIMINAR")
         else:
-            deps = dependencies(row["id"])
+            deps = dependencies(row["id"], user["id"])
             st.write("Dependencias", deps)
-            if deletable(row["id"]):
+            if deletable(row["id"], user["id"]):
                 confirm = st.checkbox("Confirmo La Eliminación Permanente")
                 if st.button("Eliminar Inmueble", disabled=not confirm):
                     audit("INMUEBLE_ELIMINAR", "condominios", row["id"], before=row)
-                    execute("DELETE FROM condominios WHERE id=%s", (row["id"],))
+                    delete_property(
+                        row["id"],
+                        user["id"],
+                    )
                     st.rerun()
             else:
                 st.warning("Este Inmueble Tiene Registros Relacionados. Utiliza Desactivar.")

@@ -19,9 +19,15 @@ def test_edit_form_is_scoped_to_selected_property():
 
 
 def test_update_uses_selected_property_id():
-    s = src()
-    assert 'WHERE id=%s' in s
-    assert 'row["id"]' in s
+    view = src()
+    service = Path("services/properties.py").read_text(
+        encoding="utf-8"
+    )
+    assert "update_property(" in view
+    assert 'row["id"],' in view
+    assert "def update_property(pid, values, actor_id):" in service
+    assert "WHERE id=%s" in service
+    assert 'row["id"]' in view
 
 
 def test_audit_uses_selected_property_id():

@@ -12,8 +12,15 @@ def test_properties_condition_catalog():
     assert '"Estado O Condición"' in V
 
 def test_properties_persist_new_fields():
-    assert "fecha_construccion,condicion_codigo" in V
-    assert "c.fecha_construccion,c.condicion_codigo" in S
+    service = Path("services/properties.py").read_text(
+        encoding="utf-8"
+    )
+    assert "fecha_construccion" in service
+    assert "condicion_codigo" in service
+    assert "def create_property(actor_id, values):" in service
+    assert "def update_property(pid, values, actor_id):" in service
+    assert "c.fecha_construccion" in S
+    assert "c.condicion_codigo" in S
 
 def test_008_supports_property_fields():
     assert "condominios ADD COLUMN IF NOT EXISTS fecha_construccion DATE" in M

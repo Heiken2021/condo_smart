@@ -14,9 +14,12 @@ def test_inactive_grid_row_does_not_become_global_active():
     assert "offline property remains selected" in s.lower()
 
 def test_state_change_is_explicit_not_toggle():
-    s = read("views/inmuebles.py")
-    assert "activo=NOT activo" not in s
-    assert "UPDATE condominios SET activo=%s" in s
+    view = read("views/inmuebles.py")
+    service = read("services/properties.py")
+    assert "activo=NOT activo" not in view
+    assert "set_property_active(" in view
+    assert "def set_property_active(pid, active, actor_id):" in service
+    assert "SET activo=%s" in service
 
 def test_offline_and_reactivation_require_confirmation():
     s = read("views/inmuebles.py")
