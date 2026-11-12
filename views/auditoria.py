@@ -5,10 +5,12 @@ from components.ui import title
 from core.access import authorized_properties, cid
 from services.audit_service import (
     financial_severity,
+    financial_status_explanation,
     list_financial_audit,
     list_system_audit,
     overall_severity,
     system_severity,
+    system_status_explanation,
 )
 
 
@@ -56,19 +58,26 @@ def _selected_property(user):
 
 
 def _status_card(
-    severity,
+    explanation,
     title_text,
-    subtitle,
 ):
+    severity = explanation["severity"]
+
     color = SEVERITY_COLORS[severity]
     icon = SEVERITY_ICONS[severity]
+
+    display = {
+        "NORMAL": "Normal",
+        "ATENCION": "Atención",
+        "CRITICO": "Crítico",
+    }[severity]
 
     st.markdown(
         f"""
         <div style="
             border-left:8px solid {color};
             border-radius:10px;
-            padding:14px 18px;
+            padding:16px 20px;
             background:rgba(255,255,255,.78);
             box-shadow:0 2px 8px rgba(0,0,0,.06);
             margin-bottom:12px;
@@ -81,20 +90,56 @@ def _status_card(
             ">
                 {title_text}
             </div>
+
             <div style="
                 font-size:25px;
                 font-weight:700;
                 color:{color};
-                margin-top:3px;
-            ">
-                {icon} {severity.title()}
-            </div>
-            <div style="
-                font-size:12px;
-                color:#667085;
                 margin-top:4px;
             ">
-                {subtitle}
+                {icon} {display}
+            </div>
+
+            <div style="
+                font-size:14px;
+                color:#344054;
+                margin-top:10px;
+                font-weight:600;
+            ">
+                {explanation["summary"]}
+            </div>
+
+            <div style="
+                margin-top:12px;
+                padding-top:10px;
+                border-top:1px solid #E4E7EC;
+                font-size:13px;
+                color:#475467;
+                line-height:1.55;
+            ">
+                <b>¿Por qué?</b>
+                {explanation["reason"]}
+                <br>
+
+                <b>Evento detonante:</b>
+                {explanation["trigger"]}
+                <br>
+
+                <b>Criterio utilizado:</b>
+                {explanation["criteria"]}
+                <br>
+
+                <b>Recomendación:</b>
+                {explanation["recommendation"]}
+            </div>
+
+            <div style="
+                font-size:11px;
+                color:#98A2B3;
+                margin-top:10px;
+            ">
+                Evaluación automática basada en reglas
+                determinísticas de auditoría.
             </div>
         </div>
         """,
@@ -160,10 +205,11 @@ def _financial_dataframe(rows):
 
 
 def _system_dashboard(rows):
-    severity = overall_severity(
+    explanation = system_status_explanation(
         rows,
-        system_severity,
     )
+
+    severity = explanation["severity"]
 
     counts = _severity_counts(
         rows,
@@ -179,9 +225,8 @@ def _system_dashboard(rows):
     )
 
     _status_card(
-        severity,
+        explanation,
         "Estado General Del Sistema",
-        "Semáforo calculado sobre eventos auditados.",
     )
 
     c1, c2, c3, c4 = st.columns(4)
@@ -315,10 +360,11 @@ def _system_dashboard(rows):
 
 
 def _financial_dashboard(rows):
-    severity = overall_severity(
+    explanation = financial_status_explanation(
         rows,
-        financial_severity,
     )
+
+    severity = explanation["severity"]
 
     counts = _severity_counts(
         rows,
@@ -331,10 +377,8 @@ def _financial_dashboard(rows):
     )
 
     _status_card(
-        severity,
+        explanation,
         "Estado De Auditoría Financiera",
-        "Semáforo de movimientos registrados "
-        "en el ledger financiero.",
     )
 
     c1, c2, c3, c4 = st.columns(4)
