@@ -234,6 +234,421 @@ def _financial_dataframe(rows):
     )
 
 
+def _incident_attribution(
+    df,
+    *,
+    mode,
+):
+    if df.empty:
+        return
+
+    incidents = df[
+        df["Severidad"].isin(
+            ["ATENCION", "CRITICO"]
+        )
+    ].copy()
+
+    if incidents.empty:
+        st.success(
+            "No existen usuarios ni operaciones "
+            "detonantes para los filtros actuales."
+        )
+        return
+
+    if mode == "system":
+        action_column = "Acción"
+        entity_column = "Entidad"
+        record_column = "Registro"
+        section_title = (
+            "Responsables Y Detonantes"
+        )
+        action_title = (
+            "Acciones Que Generan Incidentes"
+        )
+        detail_title = (
+            "Investigar Eventos Ponderantes"
+        )
+        incident_label = "evento(s)"
+    else:
+        action_column = "Operación"
+        entity_column = "Entidad"
+        record_column = "Registro"
+        section_title = (
+            "Responsables Y Detonantes Financieros"
+        )
+        action_title = (
+            "Operaciones Que Generan Alertas"
+        )
+        detail_title = (
+            "Investigar Movimientos Ponderantes"
+        )
+        incident_label = "movimiento(s)"
+
+    st.markdown(
+        f"### {section_title}"
+    )
+
+    critical = incidents[
+        incidents["Severidad"] == "CRITICO"
+    ]
+
+    if not critical.empty:
+        principal = critical.iloc[0]
+        principal_severity = "🔴 Crítico"
+    else:
+        principal = incidents.iloc[0]
+        principal_severity = "🟡 Atención"
+
+    with st.container(border=True):
+        st.markdown(
+            "#### Principal Detonante"
+        )
+
+        st.caption(
+            "Evento con la mayor severidad que "
+            "contribuye al estado actual."
+        )
+
+        p1, p2, p3, p4 = st.columns(4)
+
+        p1.metric(
+            "Severidad",
+            principal_severity,
+        )
+
+        p2.metric(
+            "Usuario",
+            str(
+                principal.get("Usuario")
+                or "sistema"
+            ),
+        )
+
+        p3.metric(
+            action_column,
+            str(
+                principal.get(action_column)
+                or "Sin identificar"
+            ),
+        )
+
+        p4.metric(
+            "Fecha",
+            str(
+                principal.get("Fecha")
+                or ""
+            ),
+        )
+
+        principal_entity = str(
+            principal.get(entity_column)
+            or "Sin identificar"
+        )
+
+        principal_record = principal.get(
+            record_column
+        )
+
+        st.markdown(
+            f"**Entidad afectada:** "
+            f"{principal_entity}  \n"
+            f"**Registro:** "
+            f"{principal_record if principal_record is not None else 'No identificado'}"
+        )
+
+    user_summary = (
+        incidents
+        .groupby(
+            [
+                "Usuario",
+                "Severidad",
+            ],
+            dropna=False,
+        )
+        .size()
+        .unstack(
+            fill_value=0,
+        )
+        .reset_index()
+    )
+
+    if "CRITICO" not in user_summary.columns:
+        user_summary["CRITICO"] = 0
+
+    if "ATENCION" not in user_summary.columns:
+        user_summary["ATENCION"] = 0
+
+    user_summary = user_summary.rename(
+        columns={
+            "CRITICO": "Críticos",
+            "ATENCION": "Atención",
+        }
+    )
+
+    user_summary["Impacto"] = (
+        user_summary["Críticos"] * 3
+        + user_summary["Atención"]
+    )
+
+    user_summary = user_summary.sort_values(
+        [
+            "Impacto",
+            "Críticos",
+            "Atención",
+        ],
+        ascending=False,
+    )
+
+    action_summary = (
+        incidents
+        .groupby(
+            [
+                action_column,
+                "Severidad",
+            ],
+            dropna=False,
+        )
+        .size()
+        .unstack(
+            fill_value=0,
+        )
+        .reset_index()
+    )
+
+    if "CRITICO" not in action_summary.columns:
+        action_summary["CRITICO"] = 0
+
+    if "ATENCION" not in action_summary.columns:
+        action_summary["ATENCION"] = 0
+
+    action_summary = action_summary.rename(
+        columns={
+            "CRITICO": "Críticos",
+            "ATENCION": "Atención",
+        }
+    )
+
+    action_summary["Impacto"] = (
+        action_summary["Críticos"] * 3
+        + action_summary["Atención"]
+    )
+
+    action_summary = action_summary.sort_values(
+        [
+            "Impacto",
+            "Críticos",
+            "Atención",
+        ],
+        ascending=False,
+    )
+
+    chart_users, chart_actions = st.columns(2)
+
+    with chart_users:
+        st.markdown(
+            "#### Usuarios Que Generan Incidentes"
+        )
+
+        user_chart = (
+            user_summary[
+                [
+                    "Usuario",
+                    "Críticos",
+                    "Atención",
+                ]
+            ]
+            .head(10)
+            .set_index("Usuario")
+        )
+
+        st.bar_chart(
+            user_chart,
+            horizontal=True,
+            height=320,
+        )
+
+    with chart_actions:
+        st.markdown(
+            f"#### {action_title}"
+        )
+
+        action_chart = (
+            action_summary[
+                [
+                    action_column,
+                    "Críticos",
+                    "Atención",
+                ]
+            ]
+            .head(10)
+            .set_index(action_column)
+        )
+
+        st.bar_chart(
+            action_chart,
+            horizontal=True,
+            height=320,
+        )
+
+    st.markdown(
+        "#### Matriz Usuario × Detonante"
+    )
+
+    matrix = (
+        incidents
+        .groupby(
+            [
+                "Usuario",
+                action_column,
+                "Severidad",
+            ],
+            dropna=False,
+        )
+        .size()
+        .rename("Eventos")
+        .reset_index()
+        .sort_values(
+            [
+                "Severidad",
+                "Eventos",
+            ],
+            ascending=[
+                True,
+                False,
+            ],
+        )
+    )
+
+    matrix["Nivel"] = matrix[
+        "Severidad"
+    ].map(
+        {
+            "CRITICO": "🔴 Crítico",
+            "ATENCION": "🟡 Atención",
+        }
+    )
+
+    st.dataframe(
+        matrix[
+            [
+                "Usuario",
+                action_column,
+                "Nivel",
+                "Eventos",
+            ]
+        ],
+        hide_index=True,
+        use_container_width=True,
+    )
+
+    with st.expander(
+        detail_title,
+        expanded=False,
+    ):
+        users = [
+            "Todos"
+        ] + sorted(
+            incidents["Usuario"]
+            .fillna("sistema")
+            .astype(str)
+            .unique()
+            .tolist()
+        )
+
+        actions = [
+            "Todas"
+        ] + sorted(
+            incidents[action_column]
+            .fillna("Sin identificar")
+            .astype(str)
+            .unique()
+            .tolist()
+        )
+
+        d1, d2, d3 = st.columns(3)
+
+        selected_user = d1.selectbox(
+            "Usuario Detonante",
+            users,
+            key=f"{mode}_incident_user",
+        )
+
+        selected_action = d2.selectbox(
+            action_column,
+            actions,
+            key=f"{mode}_incident_action",
+        )
+
+        selected_level = d3.selectbox(
+            "Nivel",
+            [
+                "Todos",
+                "🔴 Crítico",
+                "🟡 Atención",
+            ],
+            key=f"{mode}_incident_level",
+        )
+
+        detail = incidents.copy()
+
+        if selected_user != "Todos":
+            detail = detail[
+                detail["Usuario"]
+                .fillna("sistema")
+                .astype(str)
+                == selected_user
+            ]
+
+        if selected_action != "Todas":
+            detail = detail[
+                detail[action_column]
+                .fillna("Sin identificar")
+                .astype(str)
+                == selected_action
+            ]
+
+        if selected_level == "🔴 Crítico":
+            detail = detail[
+                detail["Severidad"]
+                == "CRITICO"
+            ]
+
+        if selected_level == "🟡 Atención":
+            detail = detail[
+                detail["Severidad"]
+                == "ATENCION"
+            ]
+
+        st.caption(
+            f"{len(detail)} {incident_label} "
+            "coinciden con la investigación."
+        )
+
+        detail_columns = [
+            "Fecha",
+            "Usuario",
+            action_column,
+            entity_column,
+            record_column,
+            "Severidad",
+            "Detalle",
+        ]
+
+        if (
+            mode == "financial"
+            and "Monto MXN" in detail.columns
+        ):
+            detail_columns.insert(
+                5,
+                "Monto MXN",
+            )
+
+        st.dataframe(
+            detail[detail_columns],
+            hide_index=True,
+            use_container_width=True,
+        )
+
 def _system_dashboard(rows):
     explanation = system_status_explanation(
         rows,
@@ -289,6 +704,11 @@ def _system_dashboard(rows):
         return
 
     df = _system_dataframe(rows)
+
+    _incident_attribution(
+        df,
+        mode="system",
+    )
 
     chart_left, chart_right = st.columns(2)
 
@@ -448,6 +868,11 @@ def _financial_dashboard(rows):
         return
 
     df = _financial_dataframe(rows)
+
+    _incident_attribution(
+        df,
+        mode="financial",
+    )
 
     chart_left, chart_right = st.columns(2)
 
