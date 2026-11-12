@@ -1,5 +1,28 @@
+from core.authorization import require
 from core.db import fetch_all, fetch_one, execute
 from services.property_structure import validate_space_structure
+
+
+def _actor(actor_id):
+    user = fetch_one(
+        """
+        SELECT id,username,nombre,email,rol_global,activo
+        FROM usuarios
+        WHERE id=%s
+        """,
+        (actor_id,),
+    )
+    if not user or not user.get("activo"):
+        raise PermissionError("USER_INACTIVE")
+    return dict(user)
+
+
+def _require_actor(actor_id, permission, property_id):
+    return require(
+        _actor(actor_id),
+        permission,
+        property_id,
+    )
 
 
 def list_spaces(property_id):
@@ -49,7 +72,13 @@ def create_space(property_id, nombre, tipo_codigo, estado_codigo,
                  cuota_base=0, indiviso_pct=0, clave=None, superficie_m2=0,
                  edificio_zona=None, nivel=None, uso_codigo=None, descripcion=None,
                  fecha_construccion=None, anio_construccion=None, condicion_codigo=None,
-                 responsable_persona_id=None, responsable_relacion=None, estructura_id=None):
+                 responsable_persona_id=None, responsable_relacion=None,
+                estructura_id=None, actor_id=None):
+    _require_actor(
+        actor_id,
+        "ESPACIO_CREAR",
+        property_id,
+    )
     estructura_id = validate_space_structure(property_id, estructura_id)
     return execute(
         """
@@ -71,7 +100,15 @@ def update_space(property_id, space_id, nombre, tipo_codigo, estado_codigo,
                  cuota_base, indiviso_pct, clave=None, superficie_m2=0,
                  edificio_zona=None, nivel=None, uso_codigo=None, descripcion=None,
                  fecha_construccion=None, anio_construccion=None, condicion_codigo=None,
-                 responsable_persona_id=None, responsable_relacion=None, estructura_id=None):
+                 responsable_persona_id=None, responsable_relacion=None,
+                estructura_id=None, actor_id=None):
+    _require_actor(
+        actor_id,
+        "ESPACIO_MODIFICAR",
+        property_id,
+    )
+    if not get_space(property_id, space_id):
+        raise ValueError("INVALID_SPACE")
     estructura_id = validate_space_structure(property_id, estructura_id)
     execute(
         """
@@ -103,8 +140,20 @@ def list_occupancy_history(property_id, space_id):
         """,(space_id,property_id))
 
 
-def sync_responsible_history(property_id, space_id, persona_id, relation, fecha_inicio=None):
-    if not get_space(property_id,space_id):
+def sync_responsible_history(
+    property_id,
+    space_id,
+    persona_id,
+    relation,
+    fecha_inicio=None,
+    actor_id=None,
+):
+    _require_actor(
+        actor_id,
+        "ESPACIO_MODIFICAR",
+        property_id,
+    )
+    if not get_space(property_id, space_id):
         return False
     current=fetch_one("SELECT persona_id,tipo_relacion FROM persona_espacios WHERE espacio_id=%s AND activo=TRUE ORDER BY id DESC LIMIT 1",(space_id,))
     if current and current["persona_id"]==persona_id and current["tipo_relacion"]==relation:
@@ -117,12 +166,32 @@ def sync_responsible_history(property_id, space_id, persona_id, relation, fecha_
     return True
 
 
-def set_active(property_id, space_id, active):
-    execute("UPDATE espacios SET activo=%s WHERE id=%s AND condominio_id=%s",
-            (active,space_id,property_id))
+def set_active(property_id, space_id, active, actor_id):
+    permission = (
+        "ESPACIO_REACTIVAR"
+        if active
+        else "ESPACIO_DESACTIVAR"
+    )
+    _require_actor(
+        actor_id,
+        permission,
+        property_id,
+    )
+    if not get_space(property_id, space_id):
+        raise ValueError("INVALID_SPACE")
+    execute(
+        "UPDATE espacios SET activo=%s WHERE id=%s AND condominio_id=%s",
+        (active, space_id, property_id),
+    )
 
 
-def dependencies(property_id, space_id):
+def dependencies(property_id, space_id, actor_id=None):
+    if actor_id is not None:
+        _require_actor(
+            actor_id,
+            "ESPACIO_ELIMINAR",
+            property_id,
+        )
     if not get_space(property_id, space_id):
         return None
     checks = {
@@ -134,13 +203,25 @@ def dependencies(property_id, space_id):
     return {name:int(fetch_one(sql,params)["n"]) for name,(sql,params) in checks.items()}
 
 
-def deletable(property_id, space_id):
-    deps=dependencies(property_id,space_id)
+def deletable(property_id, space_id, actor_id=None):
+    deps = dependencies(
+        property_id,
+        space_id,
+        actor_id,
+    )
     return deps is not None and sum(deps.values()) == 0
 
 
-def delete_space(property_id, space_id):
-    if not deletable(property_id,space_id):
+def delete_space(property_id, space_id, actor_id):
+    _require_actor(
+        actor_id,
+        "ESPACIO_ELIMINAR",
+        property_id,
+    )
+    if not deletable(property_id, space_id):
         return False
-    execute("DELETE FROM espacios WHERE id=%s AND condominio_id=%s",(space_id,property_id))
+    execute(
+        "DELETE FROM espacios WHERE id=%s AND condominio_id=%s",
+        (space_id, property_id),
+    )
     return True

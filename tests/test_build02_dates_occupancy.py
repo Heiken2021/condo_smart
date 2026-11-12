@@ -9,5 +9,7 @@ def test_spaces_use_calendar_dates():
  assert 'date_input("Fecha de construccion"' in V
  assert 'date_input("Fecha de ocupacion / inicio de relacion"' in V
 def test_occupancy_history_accepts_start_date():
- assert "def sync_responsible_history(property_id, space_id, persona_id, relation, fecha_inicio=None)" in S
+ assert "def sync_responsible_history(" in S
+ assert '"ESPACIO_MODIFICAR"' in S
+ assert "actor_id=None" in S
  assert "COALESCE(%s,CURRENT_DATE)" in S

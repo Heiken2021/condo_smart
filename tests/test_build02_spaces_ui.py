@@ -13,4 +13,4 @@ def test_b02_spaces_ui_permissions():
 def test_b02_spaces_ui_has_selectable_grid():
     s=src(); assert 'on_select="rerun"' in s and 'selection_mode="single-row"' in s
 def test_b02_spaces_ui_delete_checks_dependencies():
-    s=src(); assert 'dependencies(pid,row["id"])' in s and 'deletable(pid,row["id"])' in s
+    s=src(); assert 'dependencies(pid,row["id"],user["id"])' in s and 'deletable(pid,row["id"],user["id"])' in s

@@ -154,18 +154,18 @@ def render():
                     if not data["nombre"]: st.error("El nombre es obligatorio.")
                     else:
                         fecha_ocupacion=data.pop("fecha_ocupacion", None)
-                        update_space(pid,row["id"],**data)
-                        sync_responsible_history(pid,row["id"],data.get("responsable_persona_id"),data.get("responsable_relacion"),fecha_ocupacion)
+                        update_space(pid,row["id"],actor_id=user["id"],**data)
+                        sync_responsible_history(pid,row["id"],data.get("responsable_persona_id"),data.get("responsable_relacion"),fecha_ocupacion,user["id"])
                         st.success("Espacio actualizado."); st.rerun()
         if management_section=="Cambiar Estado":
             target=not row["activo"]; permission="ESPACIO_REACTIVAR" if target else "ESPACIO_DESACTIVAR"
             if not _decision(user,permission,pid).allowed: _denied(permission)
             elif st.button("Reactivar Espacio" if target else "Desactivar Espacio",key="selected_state"):
-                set_active(pid,row["id"],target); st.rerun()
+                set_active(pid,row["id"],target,user["id"]); st.rerun()
         if management_section=="Eliminar":
             if not _decision(user,"ESPACIO_ELIMINAR",pid).allowed: _denied("ESPACIO_ELIMINAR")
             else:
-                deps=dependencies(pid,row["id"]) or {}
+                deps=dependencies(pid,row["id"],user["id"]) or {}
                 st.markdown("**Dependencias asociadas**")
                 dep_cols=st.columns(4)
                 dep_items=[("Personas",deps.get("personas",0)),("Usuarios",deps.get("usuarios",0)),("Cargos",deps.get("cargos",0)),("Pagos",deps.get("pagos",0))]
@@ -176,11 +176,11 @@ def render():
                     st.warning(f"Este espacio tiene {dep_total} dependencia(s) asociada(s) y no puede eliminarse permanentemente.")
                 else:
                     st.success("Este espacio no tiene dependencias asociadas y puede eliminarse.")
-                can=deletable(pid,row["id"])
+                can=deletable(pid,row["id"],user["id"])
                 confirm=st.checkbox("Confirmo la eliminacion permanente",disabled=not can,key="selected_delete_confirm")
                 if not can: st.warning("El espacio tiene dependencias. Desactivalo si corresponde.")
                 if st.button("Eliminar Espacio",disabled=not(can and confirm),key="selected_delete"):
-                    if delete_space(pid,row["id"]): st.rerun()
+                    if delete_space(pid,row["id"],user["id"]): st.rerun()
 
     if location_selected is not None:
         create_col,_=st.columns([1.6,8.4])
@@ -205,7 +205,7 @@ def render():
                     if not data["nombre"]: st.error("El nombre es obligatorio.")
                     else:
                         fecha_ocupacion=data.pop("fecha_ocupacion", None)
-                        record=create_space(pid,**data)
-                        sync_responsible_history(pid,record["id"],data.get("responsable_persona_id"),data.get("responsable_relacion"),fecha_ocupacion)
+                        record=create_space(pid,actor_id=user["id"],**data)
+                        sync_responsible_history(pid,record["id"],data.get("responsable_persona_id"),data.get("responsable_relacion"),fecha_ocupacion,user["id"])
                         st.session_state.space_create_mode=False
                         st.success("Espacio creado."); st.rerun()
