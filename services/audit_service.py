@@ -68,6 +68,115 @@ def serialize(value):
     )
 
 
+SYSTEM_CRITICAL_TOKENS = (
+    "ELIMINAR",
+    "DELETE",
+    "DENEG",
+    "UNAUTHORIZED",
+    "FORBIDDEN",
+    "ACCESS_DENIED",
+    "PERMISSION_DENIED",
+    "AUTHORIZATION_FAILED",
+)
+
+SYSTEM_WARNING_TOKENS = (
+    "REVOCAR",
+    "DESACTIVAR",
+    "CONFIGURACION",
+    "PERMISO",
+    "PASSWORD",
+    "RECOVERY",
+    "SEGURIDAD",
+)
+
+FINANCIAL_CRITICAL_TOKENS = (
+    "REVERS",
+    "CANCEL",
+    "ANUL",
+)
+
+FINANCIAL_WARNING_TOKENS = (
+    "AJUST",
+    "CORRECC",
+    "MODIFIC",
+)
+
+
+def _contains_any(value, tokens):
+    text = str(value or "").upper()
+    return any(token in text for token in tokens)
+
+
+def system_severity(row):
+    result = str(row.get("resultado") or "OK").upper()
+
+    action = row.get("accion")
+    detail = row.get("detalle")
+
+    if result not in {"OK", "SUCCESS"}:
+        return "CRITICO"
+
+    if (
+        _contains_any(action, SYSTEM_CRITICAL_TOKENS)
+        or _contains_any(detail, SYSTEM_CRITICAL_TOKENS)
+    ):
+        return "CRITICO"
+
+    if (
+        _contains_any(action, SYSTEM_WARNING_TOKENS)
+        or _contains_any(detail, SYSTEM_WARNING_TOKENS)
+    ):
+        return "ATENCION"
+
+    return "NORMAL"
+
+
+def financial_severity(row):
+    operation = row.get("tipo_operacion")
+    previous_status = row.get("estado_anterior")
+    new_status = row.get("estado_nuevo")
+
+    values = (
+        operation,
+        previous_status,
+        new_status,
+    )
+
+    if any(
+        _contains_any(
+            value,
+            FINANCIAL_CRITICAL_TOKENS,
+        )
+        for value in values
+    ):
+        return "CRITICO"
+
+    if any(
+        _contains_any(
+            value,
+            FINANCIAL_WARNING_TOKENS,
+        )
+        for value in values
+    ):
+        return "ATENCION"
+
+    return "NORMAL"
+
+
+def overall_severity(rows, classifier):
+    severities = [
+        classifier(row)
+        for row in rows
+    ]
+
+    if "CRITICO" in severities:
+        return "CRITICO"
+
+    if "ATENCION" in severities:
+        return "ATENCION"
+
+    return "NORMAL"
+
 def list_system_audit(
     user,
     property_id=None,
