@@ -3,7 +3,15 @@ import streamlit as st
 from core.db import execute,fetch_one
 from core.security import hash_password,verify_password
 from core.config import secret
-from services.audit_service import new_trace_id, serialize
+from services.audit_service import (
+    _system_reason,
+    new_trace_id,
+    serialize,
+    system_severity,
+)
+from services.audit_alerts import (
+    notify_critical_audit_event,
+)
 
 
 def audit(
@@ -17,10 +25,22 @@ def audit(
     module=None,
     trace_id=None,
 ):
-    u = st.session_state.get('user', {})
+    user = st.session_state.get(
+        'user',
+        {},
+    )
 
-    execute(
-        '''
+    property_id = st.session_state.get(
+        'condominio_id'
+    )
+
+    event_trace_id = (
+        trace_id
+        or new_trace_id()
+    )
+
+    record = execute(
+        """
         INSERT INTO auditoria(
             condominio_id,
             usuario_id,
@@ -39,11 +59,15 @@ def audit(
             %s,%s,%s,%s,%s,%s,%s,
             %s::jsonb,%s::jsonb,%s,%s,%s
         )
-        ''',
+        RETURNING id
+        """,
         (
-            st.session_state.get('condominio_id'),
-            u.get('id'),
-            u.get('username', 'sistema'),
+            property_id,
+            user.get('id'),
+            user.get(
+                'username',
+                'sistema',
+            ),
             action,
             entity,
             entity_id,
@@ -52,10 +76,43 @@ def audit(
             serialize(after),
             result,
             module,
-            trace_id or new_trace_id(),
+            event_trace_id,
         ),
+        returning=True,
     )
 
+    event = {
+        "accion": action,
+        "resultado": result,
+        "detalle": detail,
+    }
+
+    if (
+        system_severity(event)
+        == "CRITICO"
+    ):
+        try:
+            notify_critical_audit_event(
+                audit_id=record["id"],
+                property_id=property_id,
+                user=user,
+                action=action,
+                entity=entity,
+                entity_id=entity_id,
+                result=result,
+                detail=detail,
+                trace_id=event_trace_id,
+                reason=_system_reason(
+                    event,
+                ),
+            )
+
+        except Exception:
+            # El correo nunca cancela la
+            # operación que originó el evento.
+            pass
+
+    return record
 
 def bootstrap_admin():
     c=fetch_one('SELECT id FROM condominios ORDER BY id LIMIT 1')

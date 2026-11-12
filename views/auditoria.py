@@ -42,7 +42,17 @@ def _property_options(user):
 
 def _selected_property(user):
     if user.get("rol_global") != "SUPERADMIN":
-        return cid()
+        active_property = cid()
+
+        if active_property:
+            return active_property
+
+        options = _property_options(user)
+
+        return next(
+            iter(options.values()),
+            None,
+        )
 
     options = {
         "Todos Los Inmuebles": None,
@@ -1189,16 +1199,6 @@ def render():
     user = st.session_state.get("user") or {}
 
     property_id = _selected_property(user)
-
-    if (
-        user.get("rol_global") != "SUPERADMIN"
-        and not property_id
-    ):
-        st.info(
-            "Selecciona un inmueble autorizado "
-            "para consultar su auditoría."
-        )
-        return
 
     system_tab, financial_tab = st.tabs(
         [
