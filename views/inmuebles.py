@@ -339,21 +339,21 @@ def render():
                         if save:
                             if not nombre.strip(): st.error("El nombre es obligatorio.")
                             else:
-                                update_node(row["id"],selected_node["id"],nombre.strip(),clave.strip() or None,desc.strip() or None,type_labels[t],parent_map[p]); audit("ESTRUCTURA_MODIFICAR","estructura_inmueble",selected_node["id"]); st.rerun()
+                                update_node(row["id"],selected_node["id"],nombre.strip(),clave.strip() or None,desc.strip() or None,type_labels[t],parent_map[p],user["id"]); audit("ESTRUCTURA_MODIFICAR","estructura_inmueble",selected_node["id"]); st.rerun()
                 elif management=="Cambiar Estado":
                     target=not selected_node.get("activo"); permission="ESTRUCTURA_REACTIVAR" if target else "ESTRUCTURA_DESACTIVAR"
                     if not decision(user,permission,row["id"]).allowed: denied_message(permission)
                     elif st.button("Reactivar Estructura" if target else "Desactivar Estructura",type="primary"):
-                        set_node_active(row["id"],selected_node["id"],target); audit(permission,"estructura_inmueble",selected_node["id"]); st.rerun()
+                        set_node_active(row["id"],selected_node["id"],target,user["id"]); audit(permission,"estructura_inmueble",selected_node["id"]); st.rerun()
                 else:
-                    deps=node_dependencies(row["id"],selected_node["id"]) or {}
+                    deps=node_dependencies(row["id"],selected_node["id"],user["id"]) or {}
                     st.write(f"Estructuras hijas: {deps.get('hijos',0)} · Espacios vinculados: {deps.get('espacios',0)}")
                     can_delete=sum(deps.values())==0
                     if not can_delete: st.warning("No se puede eliminar mientras existan estructuras hijas o espacios vinculados.")
                     confirm=st.checkbox("Confirmo la eliminación permanente",disabled=not can_delete,key=f"structure_delete_confirm_{selected_node['id']}")
                     if not decision(user,"ESTRUCTURA_ELIMINAR",row["id"]).allowed: denied_message("ESTRUCTURA_ELIMINAR")
                     elif st.button("Eliminar Estructura",disabled=not(can_delete and confirm),type="primary"):
-                        if delete_node(row["id"],selected_node["id"]): audit("ESTRUCTURA_ELIMINAR","estructura_inmueble",selected_node["id"]); st.rerun()
+                        if delete_node(row["id"],selected_node["id"],user["id"]): audit("ESTRUCTURA_ELIMINAR","estructura_inmueble",selected_node["id"]); st.rerun()
             else:
                 st.caption("Selecciona una fila del grid para editar, cambiar su estado o eliminarla.")
 
@@ -365,7 +365,7 @@ def render():
                         c1,c2=st.columns(2); t=c1.selectbox("Tipo De Estructura",list(type_labels)); p=c2.selectbox("Estructura Padre",list(parent_map)); clave=st.text_input("Clave"); nombre=st.text_input("Nombre"); desc=st.text_area("Descripción"); add=st.form_submit_button("Agregar Estructura",type="primary")
                     if add:
                         if not nombre.strip(): st.error("El nombre es obligatorio.")
-                        else: create_node(row["id"],type_labels[t],nombre.strip(),clave.strip() or None,parent_map[p],desc.strip() or None); audit("ESTRUCTURA_CREAR","estructura_inmueble",detail=f"Inmueble {row['id']}"); st.rerun()
+                        else: create_node(row["id"],type_labels[t],nombre.strip(),clave.strip() or None,parent_map[p],desc.strip() or None,user["id"]); audit("ESTRUCTURA_CREAR","estructura_inmueble",detail=f"Inmueble {row['id']}"); st.rerun()
 
     if section == "Administradores":
         row = selected_row
