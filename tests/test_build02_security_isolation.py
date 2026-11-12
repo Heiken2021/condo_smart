@@ -23,4 +23,6 @@ def test_people_are_property_scoped():
  assert 'def list_people(property_id):' in S and 'e.condominio_id=%s' in S
 
 def test_global_modules_are_superadmin_only():
- assert "{'configuracion','catalogos','auditoria'}" in PERM
+ assert "{'configuracion','catalogos'}" in PERM
+ assert "{'configuracion','catalogos','auditoria'}" not in PERM
+ assert "'auditoria'" in PERM

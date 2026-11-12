@@ -10,7 +10,11 @@ def test_system_settings_service():
     for name in ['get_system_identity','update_system_logo','delete_system_logo','set_setting']: assert name in s
 def test_config_view_exists(): assert Path('views/configuracion.py').exists()
 def test_config_has_internal_root_gate(): assert "rol_global') != 'SUPERADMIN'" in text('views/configuracion.py')
-def test_menu_hides_config_from_non_root(): assert "{'configuracion','catalogos','auditoria'}" in text('core/permissions.py')
+def test_menu_hides_config_from_non_root():
+    s=text('core/permissions.py')
+    assert "{'configuracion','catalogos'}" in s
+    assert "{'configuracion','catalogos','auditoria'}" not in s
+    assert "'auditoria'" in s
 def test_global_logo_abc():
     s=text('views/configuracion.py')
     for action in ['SYSTEM_LOGO_ALTA','SYSTEM_LOGO_CAMBIO','SYSTEM_LOGO_BAJA']: assert action in s

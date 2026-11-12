@@ -3,11 +3,58 @@ import streamlit as st
 from core.db import execute,fetch_one
 from core.security import hash_password,verify_password
 from core.config import secret
+from services.audit_service import new_trace_id, serialize
 
 
-def audit(action,entity=None,entity_id=None,detail=None,before=None,after=None,result='OK'):
-    u=st.session_state.get('user',{})
-    execute('INSERT INTO auditoria(condominio_id,usuario_id,username,accion,entidad,entidad_id,detalle,valor_anterior,valor_nuevo,resultado) VALUES(%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s)',(st.session_state.get('condominio_id'),u.get('id'),u.get('username','sistema'),action,entity,entity_id,detail,json.dumps(before,default=str) if before else None,json.dumps(after,default=str) if after else None,result))
+def audit(
+    action,
+    entity=None,
+    entity_id=None,
+    detail=None,
+    before=None,
+    after=None,
+    result='OK',
+    module=None,
+    trace_id=None,
+):
+    u = st.session_state.get('user', {})
+
+    execute(
+        '''
+        INSERT INTO auditoria(
+            condominio_id,
+            usuario_id,
+            username,
+            accion,
+            entidad,
+            entidad_id,
+            detalle,
+            valor_anterior,
+            valor_nuevo,
+            resultado,
+            modulo,
+            trace_id
+        )
+        VALUES(
+            %s,%s,%s,%s,%s,%s,%s,
+            %s::jsonb,%s::jsonb,%s,%s,%s
+        )
+        ''',
+        (
+            st.session_state.get('condominio_id'),
+            u.get('id'),
+            u.get('username', 'sistema'),
+            action,
+            entity,
+            entity_id,
+            detail,
+            serialize(before),
+            serialize(after),
+            result,
+            module,
+            trace_id or new_trace_id(),
+        ),
+    )
 
 
 def bootstrap_admin():
