@@ -1,3 +1,4 @@
+import textwrap
 import pandas as pd
 import streamlit as st
 
@@ -72,8 +73,7 @@ def _status_card(
         "CRITICO": "Crítico",
     }[severity]
 
-    st.markdown(
-        f"""
+    html = f"""
         <div style="
             border-left:8px solid {color};
             border-radius:10px;
@@ -142,7 +142,10 @@ def _status_card(
                 determinísticas de auditoría.
             </div>
         </div>
-        """,
+        """
+
+    st.markdown(
+        textwrap.dedent(html).strip(),
         unsafe_allow_html=True,
     )
 
