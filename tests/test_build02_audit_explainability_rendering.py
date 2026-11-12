@@ -7,12 +7,30 @@ V = Path(
 
 
 def test_status_card_normalizes_html_indentation():
-    assert "import textwrap" in V
-    assert "textwrap.dedent(html).strip()" in V
+    block = V.split(
+        "def _status_card(",
+        1,
+    )[1].split(
+        "def _severity_counts(",
+        1,
+    )[0]
+
+    assert "st.html(" in block
+    assert "status_html" in block
+    assert "textwrap.dedent" not in block
 
 
 def test_status_card_still_allows_html_rendering():
-    assert "unsafe_allow_html=True" in V
+    block = V.split(
+        "def _status_card(",
+        1,
+    )[1].split(
+        "def _severity_counts(",
+        1,
+    )[0]
+
+    assert "st.html(" in block
+    assert "unsafe_allow_html=True" not in block
 
 
 def test_explanation_is_still_inside_status_card():
@@ -49,6 +67,15 @@ def test_status_card_keeps_dynamic_icon():
 
 
 def test_status_card_html_is_rendered_as_one_normalized_string():
-    assert "html = f" in V
-    assert "st.markdown(" in V
-    assert "textwrap.dedent(html).strip()" in V
+    block = V.split(
+        "def _status_card(",
+        1,
+    )[1].split(
+        "def _severity_counts(",
+        1,
+    )[0]
+
+    assert "status_html = f" in block
+    assert "st.html(" in block
+    assert "st.markdown(" not in block
+    assert "html.escape(" in block

@@ -1,4 +1,4 @@
-import textwrap
+import html
 import pandas as pd
 import streamlit as st
 
@@ -73,7 +73,35 @@ def _status_card(
         "CRITICO": "Crítico",
     }[severity]
 
-    html = f"""
+    safe_title = html.escape(
+        str(title_text),
+    )
+
+    safe_display = html.escape(
+        str(display),
+    )
+
+    safe_summary = html.escape(
+        str(explanation["summary"]),
+    )
+
+    safe_reason = html.escape(
+        str(explanation["reason"]),
+    )
+
+    safe_trigger = html.escape(
+        str(explanation["trigger"]),
+    )
+
+    safe_criteria = html.escape(
+        str(explanation["criteria"]),
+    )
+
+    safe_recommendation = html.escape(
+        str(explanation["recommendation"]),
+    )
+
+    status_html = f"""
         <div style="
             border-left:8px solid {color};
             border-radius:10px;
@@ -88,7 +116,7 @@ def _status_card(
                 font-weight:600;
                 text-transform:uppercase;
             ">
-                {title_text}
+                {safe_title}
             </div>
 
             <div style="
@@ -97,7 +125,7 @@ def _status_card(
                 color:{color};
                 margin-top:4px;
             ">
-                {icon} {display}
+                {icon} {safe_display}
             </div>
 
             <div style="
@@ -106,7 +134,7 @@ def _status_card(
                 margin-top:10px;
                 font-weight:600;
             ">
-                {explanation["summary"]}
+                {safe_summary}
             </div>
 
             <div style="
@@ -118,19 +146,19 @@ def _status_card(
                 line-height:1.55;
             ">
                 <b>¿Por qué?</b>
-                {explanation["reason"]}
+                {safe_reason}
                 <br>
 
                 <b>Evento detonante:</b>
-                {explanation["trigger"]}
+                {safe_trigger}
                 <br>
 
                 <b>Criterio utilizado:</b>
-                {explanation["criteria"]}
+                {safe_criteria}
                 <br>
 
                 <b>Recomendación:</b>
-                {explanation["recommendation"]}
+                {safe_recommendation}
             </div>
 
             <div style="
@@ -144,9 +172,8 @@ def _status_card(
         </div>
         """
 
-    st.markdown(
-        textwrap.dedent(html).strip(),
-        unsafe_allow_html=True,
+    st.html(
+        status_html,
     )
 
 
