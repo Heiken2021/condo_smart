@@ -6,6 +6,13 @@ from services.system_settings import get_system_identity, get_setting, set_setti
 from views.performance_dashboard import render as render_performance
 from components.processing_status import processing
 from views.usuarios import render_embedded as render_users_access
+from services.root_security import (
+    grant_delegated_root,
+    is_root_principal,
+    list_root_candidates,
+    list_roots,
+    revoke_delegated_root,
+)
 
 def _require_superadmin():
     user = st.session_state.get('user') or {}
@@ -101,7 +108,258 @@ def render():
 
     if security_tab.open:
         with security_tab:
-            st.info('Los parámetros de seguridad sensibles permanecen gobernados por el modelo central de autorización. Su administración se ampliará en un Build posterior.')
+            st.markdown("### Gobierno De Seguridad Root")
+
+            if not is_root_principal(user):
+                st.info(
+                    "Tu cuenta dispone de acceso global como Root Delegado. "
+                    "La asignación y revocación de privilegios Root está "
+                    "reservada al Root Principal."
+                )
+            else:
+                st.warning(
+                    "Los privilegios Root conceden acceso global al sistema. "
+                    "Asigna este nivel únicamente a usuarios autorizados."
+                )
+
+                roots = list_roots(user["id"])
+
+                root_rows = [
+                    {
+                        "Usuario": item.get("username"),
+                        "Nombre": item.get("nombre"),
+                        "Correo": item.get("email"),
+                        "Autoridad": item.get("autoridad_root"),
+                        "Estado": "Activo" if item.get("activo") else "Inactivo",
+                        "Asignado Por": item.get("asignado_por_username"),
+                        "Asignado En": item.get("root_asignado_en"),
+                    }
+                    for item in roots
+                ]
+
+                st.markdown("#### Autoridades Root")
+
+                if root_rows:
+                    st.dataframe(
+                        root_rows,
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                else:
+                    st.info("No se encontraron autoridades Root.")
+
+                candidates = list_root_candidates(user["id"])
+
+                st.markdown("#### Conceder Acceso Root Delegado")
+
+                if not candidates:
+                    st.info(
+                        "No hay usuarios activos elegibles para recibir "
+                        "privilegios Root."
+                    )
+                else:
+                    candidate_map = {
+                        (
+                            f"{item['nombre']} · {item['username']}"
+                            + (
+                                f" · {item['email']}"
+                                if item.get("email")
+                                else ""
+                            )
+                        ): item
+                        for item in candidates
+                    }
+
+                    selected_candidate_label = st.selectbox(
+                        "Usuario Elegible",
+                        list(candidate_map),
+                        key="root_security_candidate",
+                    )
+
+                    selected_candidate = candidate_map[
+                        selected_candidate_label
+                    ]
+
+                    confirmation = st.text_input(
+                        "Escribe el nombre de usuario para confirmar",
+                        key="root_security_grant_confirmation",
+                    )
+
+                    grant_confirmed = (
+                        confirmation.strip()
+                        == selected_candidate["username"]
+                    )
+
+                    if st.button(
+                        "Conceder Acceso Root Delegado",
+                        type="primary",
+                        disabled=not grant_confirmed,
+                        key="root_security_grant",
+                    ):
+                        before = {
+                            "rol_global": "USUARIO",
+                            "autoridad_root": None,
+                        }
+
+                        try:
+                            granted = grant_delegated_root(
+                                selected_candidate["id"],
+                                user["id"],
+                            )
+
+                            audit(
+                                "ROOT_DELEGADO_ASIGNAR",
+                                "usuarios",
+                                selected_candidate["id"],
+                                detail=(
+                                    "Acceso Root Delegado autorizado "
+                                    "por Root Principal"
+                                ),
+                                before=before,
+                                after={
+                                    "rol_global": granted.get("rol_global"),
+                                    "autoridad_root": granted.get(
+                                        "autoridad_root"
+                                    ),
+                                    "root_asignado_por": user["id"],
+                                },
+                                module="SEGURIDAD",
+                            )
+
+                            st.success(
+                                "El acceso Root Delegado fue concedido "
+                                "correctamente."
+                            )
+                            st.rerun()
+
+                        except (PermissionError, ValueError, RuntimeError) as exc:
+                            audit(
+                                "ROOT_PRIVILEGE_DENIED",
+                                "usuarios",
+                                selected_candidate["id"],
+                                detail=str(exc),
+                                result="DENEGADO",
+                                module="SEGURIDAD",
+                            )
+                            st.error(
+                                "No fue posible conceder el privilegio Root: "
+                                f"{exc}"
+                            )
+
+                delegated = [
+                    item
+                    for item in roots
+                    if item.get("autoridad_root") == "DELEGADO"
+                    and item.get("activo")
+                ]
+
+                st.markdown("#### Revocar Acceso Root Delegado")
+
+                if not delegated:
+                    st.info("No hay Root Delegados activos para revocar.")
+                else:
+                    delegate_map = {
+                        (
+                            f"{item['nombre']} · {item['username']}"
+                            + (
+                                f" · {item['email']}"
+                                if item.get("email")
+                                else ""
+                            )
+                        ): item
+                        for item in delegated
+                    }
+
+                    selected_delegate_label = st.selectbox(
+                        "Root Delegado",
+                        list(delegate_map),
+                        key="root_security_delegate",
+                    )
+
+                    selected_delegate = delegate_map[
+                        selected_delegate_label
+                    ]
+
+                    revoke_confirmation = st.text_input(
+                        "Escribe REVOKE seguido del usuario",
+                        key="root_security_revoke_confirmation",
+                        help=(
+                            "Ejemplo: REVOKE usuario"
+                        ),
+                    )
+
+                    expected_confirmation = (
+                        f"REVOKE {selected_delegate['username']}"
+                    )
+
+                    revoke_confirmed = (
+                        revoke_confirmation.strip()
+                        == expected_confirmation
+                    )
+
+                    if st.button(
+                        "Revocar Acceso Root Delegado",
+                        disabled=not revoke_confirmed,
+                        key="root_security_revoke",
+                    ):
+                        before = {
+                            "rol_global": selected_delegate.get("rol_global"),
+                            "autoridad_root": selected_delegate.get(
+                                "autoridad_root"
+                            ),
+                        }
+
+                        try:
+                            revoked = revoke_delegated_root(
+                                selected_delegate["id"],
+                                user["id"],
+                            )
+
+                            audit(
+                                "ROOT_DELEGADO_REVOCAR",
+                                "usuarios",
+                                selected_delegate["id"],
+                                detail=(
+                                    "Acceso Root Delegado revocado "
+                                    "por Root Principal"
+                                ),
+                                before=before,
+                                after={
+                                    "rol_global": revoked.get("rol_global"),
+                                    "autoridad_root": revoked.get(
+                                        "autoridad_root"
+                                    ),
+                                    "root_revocado_por": user["id"],
+                                },
+                                module="SEGURIDAD",
+                            )
+
+                            st.success(
+                                "El acceso Root Delegado fue revocado "
+                                "correctamente."
+                            )
+                            st.rerun()
+
+                        except (PermissionError, ValueError, RuntimeError) as exc:
+                            action = (
+                                "ROOT_PRINCIPAL_PROTECTED"
+                                if str(exc) == "ROOT_PRINCIPAL_PROTECTED"
+                                else "ROOT_PRIVILEGE_DENIED"
+                            )
+
+                            audit(
+                                action,
+                                "usuarios",
+                                selected_delegate["id"],
+                                detail=str(exc),
+                                result="DENEGADO",
+                                module="SEGURIDAD",
+                            )
+
+                            st.error(
+                                "No fue posible revocar el privilegio Root: "
+                                f"{exc}"
+                            )
     if users_tab.open:
         with users_tab:
             render_users_access()
