@@ -25,6 +25,6 @@ def test_property_refresh(): assert 'refresh_current_property' in text('views/in
 def test_portfolio_compact_clickable_image():
     s=text('views/portafolio.py');assert 'clickable_image' in s and 'width=140' in s and 'max_height=90' in s
 def test_finance_placeholder():
-    s=text('views/finanzas.py');assert 'Módulo reservado' in s
+    s=text('views/finanzas.py');assert 'Módulo reservado' not in s and 'financial_summary' in s
 def test_r3_schema_gate():
     s=text('core/schema_check.py');assert 'configuracion_sistema' in s and 'identidad_sistema' in s

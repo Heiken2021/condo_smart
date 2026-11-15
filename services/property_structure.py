@@ -221,3 +221,142 @@ def delete_node(
     )
 
     return True
+
+
+
+def descendant_node_ids(
+    property_id,
+    node_id,
+    active_only=True,
+):
+    node = get_node(
+        property_id,
+        node_id,
+    )
+
+    if not node:
+        raise ValueError(
+            "INVALID_STRUCTURE_NODE"
+        )
+
+    active_filter = (
+        " AND child.activo=TRUE"
+        if active_only
+        else ""
+    )
+
+    rows = fetch_all(
+        f"""
+        WITH RECURSIVE descendants AS (
+            SELECT
+                root.id,
+                root.condominio_id,
+                root.parent_id,
+                root.activo
+            FROM estructura_inmueble root
+            WHERE root.id=%s
+              AND root.condominio_id=%s
+
+            UNION ALL
+
+            SELECT
+                child.id,
+                child.condominio_id,
+                child.parent_id,
+                child.activo
+            FROM estructura_inmueble child
+            JOIN descendants parent
+              ON child.parent_id=parent.id
+             AND child.condominio_id=
+                 parent.condominio_id
+            WHERE child.condominio_id=%s
+              {active_filter}
+        )
+        SELECT id
+        FROM descendants
+        ORDER BY id
+        """,
+        (
+            node_id,
+            property_id,
+            property_id,
+        ),
+    )
+
+    return [
+        row["id"]
+        for row in rows
+        if (
+            not active_only
+            or row.get("id") == node_id
+            or True
+        )
+    ]
+
+
+def structure_scope_spaces(
+    property_id,
+    scope_kind,
+    structure_id=None,
+    active_only=True,
+):
+    scope_kind = str(
+        scope_kind or ""
+    ).upper()
+
+    params = [property_id]
+
+    sql = """
+        SELECT
+            e.id,
+            e.condominio_id,
+            e.estructura_id,
+            e.clave,
+            e.nombre,
+            e.tipo_codigo,
+            e.estado_codigo,
+            e.activo
+        FROM espacios e
+        WHERE e.condominio_id=%s
+    """
+
+    if active_only:
+        sql += " AND e.activo=TRUE"
+
+    if scope_kind == "ALL":
+        pass
+
+    elif scope_kind == "DIRECT":
+        sql += " AND e.estructura_id IS NULL"
+
+    elif scope_kind == "NODE":
+        node_ids = descendant_node_ids(
+            property_id,
+            structure_id,
+            active_only=active_only,
+        )
+
+        if not node_ids:
+            return []
+
+        sql += (
+            " AND e.estructura_id = ANY(%s)"
+        )
+        params.append(node_ids)
+
+    else:
+        raise ValueError(
+            "INVALID_FINANCIAL_SCOPE"
+        )
+
+    sql += """
+        ORDER BY
+            COALESCE(e.clave, ''),
+            e.nombre,
+            e.id
+    """
+
+    return fetch_all(
+        sql,
+        tuple(params),
+    )
