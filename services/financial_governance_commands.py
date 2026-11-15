@@ -1,0 +1,2053 @@
+import json
+from datetime import date
+
+from core.authorization import require
+from core.db import fetch_one, pool
+from services.audit_service import (
+    new_trace_id,
+    sanitize,
+)
+
+
+OBJECTIVE_STATES = {
+    "BORRADOR",
+    "APROBADO",
+    "INACTIVO",
+}
+
+POLICY_STATES = {
+    "BORRADOR",
+    "APROBADO",
+    "INACTIVO",
+}
+
+
+def _actor(actor_id):
+    row = fetch_one(
+        """
+        SELECT
+            id,
+            username,
+            nombre,
+            email,
+            rol_global,
+            activo
+        FROM usuarios
+        WHERE id=%s
+        """,
+        (actor_id,),
+    )
+
+    if not row or not row.get("activo"):
+        raise PermissionError(
+            "USER_INACTIVE"
+        )
+
+    return dict(row)
+
+
+def _require_actor(
+    actor_id,
+    permission,
+    property_id,
+):
+    actor = _actor(actor_id)
+
+    require(
+        actor,
+        permission,
+        property_id,
+    )
+
+    return actor
+
+
+def _required_text(
+    value,
+    error_code,
+    max_length=None,
+):
+    text = str(value or "").strip()
+
+    if not text:
+        raise ValueError(error_code)
+
+    if (
+        max_length is not None
+        and len(text) > max_length
+    ):
+        raise ValueError(
+            error_code + "_TOO_LONG"
+        )
+
+    return text
+
+
+def _optional_text(
+    value,
+    max_length=None,
+):
+    if value is None:
+        return None
+
+    text = str(value).strip()
+
+    if not text:
+        return None
+
+    if (
+        max_length is not None
+        and len(text) > max_length
+    ):
+        raise ValueError(
+            "FINANCIAL_GOVERNANCE_TEXT_TOO_LONG"
+        )
+
+    return text
+
+
+def _valid_dates(
+    effective_from,
+    effective_to,
+):
+    if not isinstance(
+        effective_from,
+        date,
+    ):
+        raise ValueError(
+            "INVALID_EFFECTIVE_FROM"
+        )
+
+    if (
+        effective_to is not None
+        and not isinstance(
+            effective_to,
+            date,
+        )
+    ):
+        raise ValueError(
+            "INVALID_EFFECTIVE_TO"
+        )
+
+    if (
+        effective_to is not None
+        and effective_to < effective_from
+    ):
+        raise ValueError(
+            "INVALID_EFFECTIVE_DATE_RANGE"
+        )
+
+    return (
+        effective_from,
+        effective_to,
+    )
+
+
+def _json(value):
+    if value is None:
+        value = {}
+
+    return json.dumps(
+        sanitize(value),
+        default=str,
+        ensure_ascii=False,
+    )
+
+
+def _insert_audit(
+    cursor,
+    *,
+    actor,
+    property_id,
+    operation_type,
+    entity,
+    entity_id,
+    previous_status=None,
+    new_status=None,
+    detail=None,
+    metadata=None,
+    trace_id=None,
+):
+    trace_id = (
+        trace_id
+        or new_trace_id()
+    )
+
+    cursor.execute(
+        """
+        INSERT INTO auditoria_financiera(
+            condominio_id,
+            usuario_id,
+            username,
+            tipo_operacion,
+            entidad,
+            entidad_id,
+            estado_anterior,
+            estado_nuevo,
+            detalle,
+            metadata,
+            trace_id
+        )
+        VALUES(
+            %s,%s,%s,%s,%s,%s,
+            %s,%s,%s,%s::jsonb,%s
+        )
+        RETURNING id
+        """,
+        (
+            property_id,
+            actor["id"],
+            actor.get("username"),
+            operation_type,
+            entity,
+            entity_id,
+            previous_status,
+            new_status,
+            detail,
+            _json(metadata),
+            trace_id,
+        ),
+    )
+
+    return cursor.fetchone()
+
+
+def create_financial_objective(
+    *,
+    property_id,
+    code,
+    name,
+    effective_from,
+    actor_id,
+    structure_id=None,
+    description=None,
+    objective_type=None,
+    parameters=None,
+    effective_to=None,
+    priority=100,
+    change_reason=None,
+):
+    actor = _require_actor(
+        actor_id,
+        "FINANZAS_OBJETIVO_GESTIONAR",
+        property_id,
+    )
+
+    code = _required_text(
+        code,
+        "FINANCIAL_OBJECTIVE_CODE_REQUIRED",
+        80,
+    ).upper()
+
+    name = _required_text(
+        name,
+        "FINANCIAL_OBJECTIVE_NAME_REQUIRED",
+        200,
+    )
+
+    description = _optional_text(
+        description,
+    )
+
+    objective_type = _optional_text(
+        objective_type,
+        80,
+    )
+
+    change_reason = _optional_text(
+        change_reason,
+    )
+
+    effective_from, effective_to = (
+        _valid_dates(
+            effective_from,
+            effective_to,
+        )
+    )
+
+    priority = int(priority)
+
+    if priority < 0:
+        raise ValueError(
+            "INVALID_FINANCIAL_OBJECTIVE_PRIORITY"
+        )
+
+    trace_id = new_trace_id()
+
+    with pool().connection() as connection:
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO financial_objectives(
+                        condominio_id,
+                        estructura_id,
+                        codigo,
+                        nombre,
+                        descripcion,
+                        tipo_objetivo,
+                        parametros,
+                        vigente_desde,
+                        vigente_hasta,
+                        estado_codigo,
+                        prioridad,
+                        creado_por,
+                        motivo_cambio
+                    )
+                    VALUES(
+                        %s,%s,%s,%s,%s,%s,
+                        %s::jsonb,%s,%s,
+                        'BORRADOR',%s,%s,%s
+                    )
+                    RETURNING *
+                    """,
+                    (
+                        property_id,
+                        structure_id,
+                        code,
+                        name,
+                        description,
+                        objective_type,
+                        _json(parameters),
+                        effective_from,
+                        effective_to,
+                        priority,
+                        actor["id"],
+                        change_reason,
+                    ),
+                )
+
+                objective = dict(
+                    cursor.fetchone()
+                )
+
+                audit = _insert_audit(
+                    cursor,
+                    actor=actor,
+                    property_id=property_id,
+                    operation_type=(
+                        "FINANCIAL_OBJECTIVE_CREATED"
+                    ),
+                    entity=(
+                        "FINANCIAL_OBJECTIVE"
+                    ),
+                    entity_id=objective["id"],
+                    previous_status=None,
+                    new_status="BORRADOR",
+                    detail=name,
+                    metadata={
+                        "codigo": code,
+                        "estructura_id": (
+                            structure_id
+                        ),
+                        "vigente_desde": (
+                            effective_from
+                        ),
+                        "vigente_hasta": (
+                            effective_to
+                        ),
+                        "prioridad": priority,
+                    },
+                    trace_id=trace_id,
+                )
+
+            connection.commit()
+
+        except Exception:
+            connection.rollback()
+            raise
+
+    objective["audit_event_id"] = (
+        audit["id"]
+    )
+    objective["trace_id"] = trace_id
+
+    return objective
+
+
+def approve_financial_objective(
+    *,
+    property_id,
+    objective_id,
+    actor_id,
+    approval_reason,
+):
+    actor = _require_actor(
+        actor_id,
+        "FINANZAS_OBJETIVO_GESTIONAR",
+        property_id,
+    )
+
+    approval_reason = _required_text(
+        approval_reason,
+        "FINANCIAL_APPROVAL_REASON_REQUIRED",
+    )
+
+    trace_id = new_trace_id()
+
+    with pool().connection() as connection:
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT *
+                    FROM financial_objectives
+                    WHERE id=%s
+                      AND condominio_id=%s
+                    FOR UPDATE
+                    """,
+                    (
+                        objective_id,
+                        property_id,
+                    ),
+                )
+
+                current = cursor.fetchone()
+
+                if not current:
+                    raise ValueError(
+                        "FINANCIAL_OBJECTIVE_NOT_FOUND"
+                    )
+
+                current = dict(current)
+
+                if (
+                    current["estado_codigo"]
+                    != "BORRADOR"
+                ):
+                    raise ValueError(
+                        "FINANCIAL_OBJECTIVE_NOT_APPROVABLE"
+                    )
+
+                cursor.execute(
+                    """
+                    UPDATE financial_objectives
+                    SET
+                        estado_codigo='APROBADO',
+                        aprobado_por=%s,
+                        aprobado_en=NOW(),
+                        motivo_cambio=%s
+                    WHERE id=%s
+                      AND condominio_id=%s
+                    RETURNING *
+                    """,
+                    (
+                        actor["id"],
+                        approval_reason,
+                        objective_id,
+                        property_id,
+                    ),
+                )
+
+                objective = dict(
+                    cursor.fetchone()
+                )
+
+                audit = _insert_audit(
+                    cursor,
+                    actor=actor,
+                    property_id=property_id,
+                    operation_type=(
+                        "FINANCIAL_OBJECTIVE_APPROVED"
+                    ),
+                    entity=(
+                        "FINANCIAL_OBJECTIVE"
+                    ),
+                    entity_id=objective_id,
+                    previous_status="BORRADOR",
+                    new_status="APROBADO",
+                    detail=approval_reason,
+                    metadata={
+                        "codigo": objective[
+                            "codigo"
+                        ],
+                        "estructura_id": (
+                            objective.get(
+                                "estructura_id"
+                            )
+                        ),
+                    },
+                    trace_id=trace_id,
+                )
+
+            connection.commit()
+
+        except Exception:
+            connection.rollback()
+            raise
+
+    objective["audit_event_id"] = (
+        audit["id"]
+    )
+    objective["trace_id"] = trace_id
+
+    return objective
+
+
+def create_financial_policy(
+    *,
+    property_id,
+    code,
+    name,
+    effective_from,
+    actor_id,
+    structure_id=None,
+    objective_id=None,
+    description=None,
+    parameters=None,
+    effective_to=None,
+    priority=100,
+    inherits=True,
+    change_reason=None,
+):
+    actor = _require_actor(
+        actor_id,
+        "FINANZAS_POLITICA_GESTIONAR",
+        property_id,
+    )
+
+    code = _required_text(
+        code,
+        "FINANCIAL_POLICY_CODE_REQUIRED",
+        80,
+    ).upper()
+
+    name = _required_text(
+        name,
+        "FINANCIAL_POLICY_NAME_REQUIRED",
+        200,
+    )
+
+    description = _optional_text(
+        description,
+    )
+
+    change_reason = _optional_text(
+        change_reason,
+    )
+
+    effective_from, effective_to = (
+        _valid_dates(
+            effective_from,
+            effective_to,
+        )
+    )
+
+    priority = int(priority)
+
+    if priority < 0:
+        raise ValueError(
+            "INVALID_FINANCIAL_POLICY_PRIORITY"
+        )
+
+    trace_id = new_trace_id()
+
+    with pool().connection() as connection:
+        try:
+            with connection.cursor() as cursor:
+                if objective_id is not None:
+                    cursor.execute(
+                        """
+                        SELECT
+                            id,
+                            condominio_id,
+                            estructura_id,
+                            estado_codigo
+                        FROM financial_objectives
+                        WHERE id=%s
+                          AND condominio_id=%s
+                        """,
+                        (
+                            objective_id,
+                            property_id,
+                        ),
+                    )
+
+                    objective = cursor.fetchone()
+
+                    if not objective:
+                        raise ValueError(
+                            "FINANCIAL_OBJECTIVE_NOT_FOUND"
+                        )
+
+                    if (
+                        objective[
+                            "estado_codigo"
+                        ]
+                        != "APROBADO"
+                    ):
+                        raise ValueError(
+                            "FINANCIAL_POLICY_REQUIRES_APPROVED_OBJECTIVE"
+                        )
+
+                cursor.execute(
+                    """
+                    INSERT INTO financial_policies(
+                        condominio_id,
+                        estructura_id,
+                        objective_id,
+                        codigo,
+                        nombre,
+                        descripcion,
+                        parametros,
+                        vigente_desde,
+                        vigente_hasta,
+                        estado_codigo,
+                        prioridad,
+                        hereda,
+                        creado_por,
+                        motivo_cambio
+                    )
+                    VALUES(
+                        %s,%s,%s,%s,%s,%s,
+                        %s::jsonb,%s,%s,
+                        'BORRADOR',%s,%s,%s,%s
+                    )
+                    RETURNING *
+                    """,
+                    (
+                        property_id,
+                        structure_id,
+                        objective_id,
+                        code,
+                        name,
+                        description,
+                        _json(parameters),
+                        effective_from,
+                        effective_to,
+                        priority,
+                        bool(inherits),
+                        actor["id"],
+                        change_reason,
+                    ),
+                )
+
+                policy = dict(
+                    cursor.fetchone()
+                )
+
+                audit = _insert_audit(
+                    cursor,
+                    actor=actor,
+                    property_id=property_id,
+                    operation_type=(
+                        "FINANCIAL_POLICY_CREATED"
+                    ),
+                    entity="FINANCIAL_POLICY",
+                    entity_id=policy["id"],
+                    previous_status=None,
+                    new_status="BORRADOR",
+                    detail=name,
+                    metadata={
+                        "codigo": code,
+                        "objective_id": (
+                            objective_id
+                        ),
+                        "estructura_id": (
+                            structure_id
+                        ),
+                        "vigente_desde": (
+                            effective_from
+                        ),
+                        "vigente_hasta": (
+                            effective_to
+                        ),
+                        "prioridad": priority,
+                        "hereda": bool(
+                            inherits
+                        ),
+                    },
+                    trace_id=trace_id,
+                )
+
+            connection.commit()
+
+        except Exception:
+            connection.rollback()
+            raise
+
+    policy["audit_event_id"] = (
+        audit["id"]
+    )
+    policy["trace_id"] = trace_id
+
+    return policy
+
+
+def approve_financial_policy(
+    *,
+    property_id,
+    policy_id,
+    actor_id,
+    approval_reason,
+):
+    actor = _require_actor(
+        actor_id,
+        "FINANZAS_POLITICA_GESTIONAR",
+        property_id,
+    )
+
+    approval_reason = _required_text(
+        approval_reason,
+        "FINANCIAL_APPROVAL_REASON_REQUIRED",
+    )
+
+    trace_id = new_trace_id()
+
+    with pool().connection() as connection:
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT *
+                    FROM financial_policies
+                    WHERE id=%s
+                      AND condominio_id=%s
+                    FOR UPDATE
+                    """,
+                    (
+                        policy_id,
+                        property_id,
+                    ),
+                )
+
+                current = cursor.fetchone()
+
+                if not current:
+                    raise ValueError(
+                        "FINANCIAL_POLICY_NOT_FOUND"
+                    )
+
+                current = dict(current)
+
+                if (
+                    current["estado_codigo"]
+                    != "BORRADOR"
+                ):
+                    raise ValueError(
+                        "FINANCIAL_POLICY_NOT_APPROVABLE"
+                    )
+
+                cursor.execute(
+                    """
+                    UPDATE financial_policies
+                    SET
+                        estado_codigo='APROBADO',
+                        aprobado_por=%s,
+                        aprobado_en=NOW(),
+                        motivo_cambio=%s
+                    WHERE id=%s
+                      AND condominio_id=%s
+                    RETURNING *
+                    """,
+                    (
+                        actor["id"],
+                        approval_reason,
+                        policy_id,
+                        property_id,
+                    ),
+                )
+
+                policy = dict(
+                    cursor.fetchone()
+                )
+
+                audit = _insert_audit(
+                    cursor,
+                    actor=actor,
+                    property_id=property_id,
+                    operation_type=(
+                        "FINANCIAL_POLICY_APPROVED"
+                    ),
+                    entity="FINANCIAL_POLICY",
+                    entity_id=policy_id,
+                    previous_status="BORRADOR",
+                    new_status="APROBADO",
+                    detail=approval_reason,
+                    metadata={
+                        "codigo": policy["codigo"],
+                        "objective_id": (
+                            policy.get(
+                                "objective_id"
+                            )
+                        ),
+                        "estructura_id": (
+                            policy.get(
+                                "estructura_id"
+                            )
+                        ),
+                    },
+                    trace_id=trace_id,
+                )
+
+            connection.commit()
+
+        except Exception:
+            connection.rollback()
+            raise
+
+    policy["audit_event_id"] = (
+        audit["id"]
+    )
+    policy["trace_id"] = trace_id
+
+    return policy
+
+
+
+def create_financial_rule(
+    *,
+    property_id,
+    definition_id,
+    scope_level,
+    code,
+    name,
+    actor_id,
+    policy_id=None,
+    structure_id=None,
+    space_id=None,
+    applicable_type=None,
+    description=None,
+    inherits=True,
+    is_override=False,
+    priority=100,
+):
+    actor = _require_actor(
+        actor_id,
+        "FINANZAS_REGLA_GESTIONAR",
+        property_id,
+    )
+
+    scope_level = _required_text(
+        scope_level,
+        "FINANCIAL_RULE_SCOPE_REQUIRED",
+        30,
+    ).upper()
+
+    if scope_level not in {
+        "INMUEBLE",
+        "ESTRUCTURA",
+        "ESPACIO",
+    }:
+        raise ValueError(
+            "INVALID_PROPERTY_FINANCIAL_RULE_SCOPE"
+        )
+
+    code = _required_text(
+        code,
+        "FINANCIAL_RULE_CODE_REQUIRED",
+        100,
+    ).upper()
+
+    name = _required_text(
+        name,
+        "FINANCIAL_RULE_NAME_REQUIRED",
+        200,
+    )
+
+    priority = int(priority)
+
+    if priority < 0:
+        raise ValueError(
+            "INVALID_FINANCIAL_RULE_PRIORITY"
+        )
+
+    if (
+        scope_level == "INMUEBLE"
+        and (
+            structure_id is not None
+            or space_id is not None
+        )
+    ):
+        raise ValueError(
+            "INVALID_PROPERTY_RULE_SCOPE"
+        )
+
+    if (
+        scope_level == "ESTRUCTURA"
+        and (
+            structure_id is None
+            or space_id is not None
+        )
+    ):
+        raise ValueError(
+            "INVALID_STRUCTURE_RULE_SCOPE"
+        )
+
+    if (
+        scope_level == "ESPACIO"
+        and space_id is None
+    ):
+        raise ValueError(
+            "INVALID_SPACE_RULE_SCOPE"
+        )
+
+    trace_id = new_trace_id()
+
+    with pool().connection() as connection:
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        id,
+                        codigo,
+                        activo
+                    FROM financial_rule_definitions
+                    WHERE id=%s
+                      AND activo=TRUE
+                    """,
+                    (definition_id,),
+                )
+
+                definition = cursor.fetchone()
+
+                if not definition:
+                    raise ValueError(
+                        "FINANCIAL_RULE_DEFINITION_NOT_FOUND"
+                    )
+
+                if policy_id is not None:
+                    cursor.execute(
+                        """
+                        SELECT
+                            id,
+                            condominio_id,
+                            estado_codigo
+                        FROM financial_policies
+                        WHERE id=%s
+                          AND condominio_id=%s
+                        """,
+                        (
+                            policy_id,
+                            property_id,
+                        ),
+                    )
+
+                    policy = cursor.fetchone()
+
+                    if not policy:
+                        raise ValueError(
+                            "FINANCIAL_POLICY_NOT_FOUND"
+                        )
+
+                    if (
+                        policy["estado_codigo"]
+                        != "APROBADO"
+                    ):
+                        raise ValueError(
+                            "FINANCIAL_RULE_REQUIRES_APPROVED_POLICY"
+                        )
+
+                cursor.execute(
+                    """
+                    INSERT INTO financial_rules(
+                        rule_definition_id,
+                        policy_id,
+                        scope_level,
+                        condominio_id,
+                        estructura_id,
+                        espacio_id,
+                        tipo_aplicable_codigo,
+                        codigo,
+                        nombre,
+                        descripcion,
+                        hereda,
+                        es_override,
+                        prioridad,
+                        activo,
+                        creado_por
+                    )
+                    VALUES(
+                        %s,%s,%s,%s,%s,%s,%s,
+                        %s,%s,%s,%s,%s,%s,TRUE,%s
+                    )
+                    RETURNING *
+                    """,
+                    (
+                        definition_id,
+                        policy_id,
+                        scope_level,
+                        property_id,
+                        structure_id,
+                        space_id,
+                        applicable_type,
+                        code,
+                        name,
+                        _optional_text(description),
+                        bool(inherits),
+                        bool(is_override),
+                        priority,
+                        actor["id"],
+                    ),
+                )
+
+                rule = dict(cursor.fetchone())
+
+                audit = _insert_audit(
+                    cursor,
+                    actor=actor,
+                    property_id=property_id,
+                    operation_type=(
+                        "FINANCIAL_RULE_CREATED"
+                    ),
+                    entity="FINANCIAL_RULE",
+                    entity_id=rule["id"],
+                    new_status="ACTIVO",
+                    detail=name,
+                    metadata={
+                        "definition_id": definition_id,
+                        "policy_id": policy_id,
+                        "scope_level": scope_level,
+                        "estructura_id": structure_id,
+                        "espacio_id": space_id,
+                        "es_override": bool(
+                            is_override
+                        ),
+                        "prioridad": priority,
+                    },
+                    trace_id=trace_id,
+                )
+
+            connection.commit()
+
+        except Exception:
+            connection.rollback()
+            raise
+
+    rule["audit_event_id"] = audit["id"]
+    rule["trace_id"] = trace_id
+
+    return rule
+
+
+def create_rule_version(
+    *,
+    property_id,
+    rule_id,
+    version_num,
+    effective_from,
+    parameters,
+    actor_id,
+    effective_to=None,
+    change_reason=None,
+):
+    actor = _require_actor(
+        actor_id,
+        "FINANZAS_REGLA_GESTIONAR",
+        property_id,
+    )
+
+    effective_from, effective_to = _valid_dates(
+        effective_from,
+        effective_to,
+    )
+
+    version_num = int(version_num)
+
+    if version_num <= 0:
+        raise ValueError(
+            "INVALID_FINANCIAL_RULE_VERSION"
+        )
+
+    trace_id = new_trace_id()
+
+    with pool().connection() as connection:
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        id,
+                        codigo,
+                        condominio_id,
+                        activo
+                    FROM financial_rules
+                    WHERE id=%s
+                      AND condominio_id=%s
+                      AND activo=TRUE
+                    """,
+                    (
+                        rule_id,
+                        property_id,
+                    ),
+                )
+
+                rule = cursor.fetchone()
+
+                if not rule:
+                    raise ValueError(
+                        "FINANCIAL_RULE_NOT_FOUND"
+                    )
+
+                cursor.execute(
+                    """
+                    INSERT INTO financial_rule_versions(
+                        rule_id,
+                        version_num,
+                        vigente_desde,
+                        vigente_hasta,
+                        estado_codigo,
+                        parametros,
+                        creado_por,
+                        motivo_cambio
+                    )
+                    VALUES(
+                        %s,%s,%s,%s,
+                        'BORRADOR',
+                        %s::jsonb,%s,%s
+                    )
+                    RETURNING *
+                    """,
+                    (
+                        rule_id,
+                        version_num,
+                        effective_from,
+                        effective_to,
+                        _json(parameters),
+                        actor["id"],
+                        _optional_text(change_reason),
+                    ),
+                )
+
+                version = dict(cursor.fetchone())
+
+                audit = _insert_audit(
+                    cursor,
+                    actor=actor,
+                    property_id=property_id,
+                    operation_type=(
+                        "FINANCIAL_RULE_VERSION_CREATED"
+                    ),
+                    entity="FINANCIAL_RULE_VERSION",
+                    entity_id=version["id"],
+                    new_status="BORRADOR",
+                    detail=change_reason,
+                    metadata={
+                        "rule_id": rule_id,
+                        "version_num": version_num,
+                        "vigente_desde": effective_from,
+                        "vigente_hasta": effective_to,
+                    },
+                    trace_id=trace_id,
+                )
+
+            connection.commit()
+
+        except Exception:
+            connection.rollback()
+            raise
+
+    version["audit_event_id"] = audit["id"]
+    version["trace_id"] = trace_id
+
+    return version
+
+
+def approve_rule_version(
+    *,
+    property_id,
+    version_id,
+    actor_id,
+    approval_reason,
+):
+    actor = _require_actor(
+        actor_id,
+        "FINANZAS_REGLA_APROBAR",
+        property_id,
+    )
+
+    approval_reason = _required_text(
+        approval_reason,
+        "FINANCIAL_APPROVAL_REASON_REQUIRED",
+    )
+
+    trace_id = new_trace_id()
+
+    with pool().connection() as connection:
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        version.*,
+                        rule.condominio_id,
+                        rule.codigo AS rule_code
+                    FROM financial_rule_versions version
+                    JOIN financial_rules rule
+                      ON rule.id=version.rule_id
+                    WHERE version.id=%s
+                      AND rule.condominio_id=%s
+                    FOR UPDATE
+                    """,
+                    (
+                        version_id,
+                        property_id,
+                    ),
+                )
+
+                current = cursor.fetchone()
+
+                if not current:
+                    raise ValueError(
+                        "FINANCIAL_RULE_VERSION_NOT_FOUND"
+                    )
+
+                current = dict(current)
+
+                if (
+                    current["estado_codigo"]
+                    != "BORRADOR"
+                ):
+                    raise ValueError(
+                        "FINANCIAL_RULE_VERSION_NOT_APPROVABLE"
+                    )
+
+                cursor.execute(
+                    """
+                    UPDATE financial_rule_versions
+                    SET
+                        estado_codigo='APROBADO',
+                        aprobado_por=%s,
+                        aprobado_en=NOW(),
+                        motivo_cambio=%s
+                    WHERE id=%s
+                    RETURNING *
+                    """,
+                    (
+                        actor["id"],
+                        approval_reason,
+                        version_id,
+                    ),
+                )
+
+                version = dict(cursor.fetchone())
+
+                audit = _insert_audit(
+                    cursor,
+                    actor=actor,
+                    property_id=property_id,
+                    operation_type=(
+                        "FINANCIAL_RULE_VERSION_APPROVED"
+                    ),
+                    entity="FINANCIAL_RULE_VERSION",
+                    entity_id=version_id,
+                    previous_status="BORRADOR",
+                    new_status="APROBADO",
+                    detail=approval_reason,
+                    metadata={
+                        "rule_id": version["rule_id"],
+                        "version_num": version[
+                            "version_num"
+                        ],
+                        "vigente_desde": version[
+                            "vigente_desde"
+                        ],
+                        "vigente_hasta": version[
+                            "vigente_hasta"
+                        ],
+                    },
+                    trace_id=trace_id,
+                )
+
+            connection.commit()
+
+        except Exception:
+            connection.rollback()
+            raise
+
+    version["audit_event_id"] = audit["id"]
+    version["trace_id"] = trace_id
+
+    return version
+
+
+def close_rule_version(
+    *,
+    property_id,
+    version_id,
+    effective_to,
+    actor_id,
+    closure_reason,
+):
+    actor = _require_actor(
+        actor_id,
+        "FINANZAS_REGLA_APROBAR",
+        property_id,
+    )
+
+    if not isinstance(effective_to, date):
+        raise ValueError(
+            "INVALID_EFFECTIVE_TO"
+        )
+
+    closure_reason = _required_text(
+        closure_reason,
+        "FINANCIAL_RULE_CLOSURE_REASON_REQUIRED",
+    )
+
+    trace_id = new_trace_id()
+
+    with pool().connection() as connection:
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        version.*,
+                        rule.condominio_id
+                    FROM financial_rule_versions version
+                    JOIN financial_rules rule
+                      ON rule.id=version.rule_id
+                    WHERE version.id=%s
+                      AND rule.condominio_id=%s
+                    FOR UPDATE
+                    """,
+                    (
+                        version_id,
+                        property_id,
+                    ),
+                )
+
+                current = cursor.fetchone()
+
+                if not current:
+                    raise ValueError(
+                        "FINANCIAL_RULE_VERSION_NOT_FOUND"
+                    )
+
+                current = dict(current)
+
+                if (
+                    current["estado_codigo"]
+                    != "APROBADO"
+                    or current["vigente_hasta"]
+                    is not None
+                ):
+                    raise ValueError(
+                        "FINANCIAL_RULE_VERSION_NOT_CLOSABLE"
+                    )
+
+                if (
+                    effective_to
+                    < current["vigente_desde"]
+                ):
+                    raise ValueError(
+                        "INVALID_EFFECTIVE_DATE_RANGE"
+                    )
+
+                cursor.execute(
+                    """
+                    UPDATE financial_rule_versions
+                    SET
+                        vigente_hasta=%s,
+                        cerrado_por=%s,
+                        cerrado_en=NOW(),
+                        motivo_cierre=%s
+                    WHERE id=%s
+                    RETURNING *
+                    """,
+                    (
+                        effective_to,
+                        actor["id"],
+                        closure_reason,
+                        version_id,
+                    ),
+                )
+
+                version = dict(cursor.fetchone())
+
+                audit = _insert_audit(
+                    cursor,
+                    actor=actor,
+                    property_id=property_id,
+                    operation_type=(
+                        "FINANCIAL_RULE_VERSION_CLOSED"
+                    ),
+                    entity="FINANCIAL_RULE_VERSION",
+                    entity_id=version_id,
+                    previous_status="APROBADO_ABIERTO",
+                    new_status="APROBADO_CERRADO",
+                    detail=closure_reason,
+                    metadata={
+                        "rule_id": version["rule_id"],
+                        "version_num": version[
+                            "version_num"
+                        ],
+                        "vigente_desde": version[
+                            "vigente_desde"
+                        ],
+                        "vigente_hasta": effective_to,
+                    },
+                    trace_id=trace_id,
+                )
+
+            connection.commit()
+
+        except Exception:
+            connection.rollback()
+            raise
+
+    version["audit_event_id"] = audit["id"]
+    version["trace_id"] = trace_id
+
+    return version
+
+
+
+def create_space_fee_version(
+    *,
+    property_id,
+    space_id,
+    fee_type,
+    amount,
+    effective_from,
+    actor_id,
+    effective_to=None,
+    rule_version_id=None,
+    origin_code="CONFIGURACION",
+    change_reason=None,
+):
+    actor = _require_actor(
+        actor_id,
+        "FINANZAS_CUOTA_GESTIONAR",
+        property_id,
+    )
+
+    fee_type = _required_text(
+        fee_type,
+        "FINANCIAL_FEE_TYPE_REQUIRED",
+        80,
+    ).upper()
+
+    origin_code = _required_text(
+        origin_code,
+        "FINANCIAL_FEE_ORIGIN_REQUIRED",
+        40,
+    ).upper()
+
+    effective_from, effective_to = _valid_dates(
+        effective_from,
+        effective_to,
+    )
+
+    try:
+        amount = float(amount)
+    except (TypeError, ValueError):
+        raise ValueError(
+            "INVALID_FINANCIAL_FEE_AMOUNT"
+        )
+
+    if amount < 0:
+        raise ValueError(
+            "INVALID_FINANCIAL_FEE_AMOUNT"
+        )
+
+    trace_id = new_trace_id()
+
+    with pool().connection() as connection:
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        id,
+                        condominio_id,
+                        estructura_id,
+                        clave,
+                        nombre,
+                        activo
+                    FROM espacios
+                    WHERE id=%s
+                      AND condominio_id=%s
+                    """,
+                    (
+                        space_id,
+                        property_id,
+                    ),
+                )
+
+                space = cursor.fetchone()
+
+                if not space:
+                    raise ValueError(
+                        "FINANCIAL_FEE_SPACE_NOT_FOUND"
+                    )
+
+                if not space.get("activo"):
+                    raise ValueError(
+                        "FINANCIAL_FEE_SPACE_INACTIVE"
+                    )
+
+                if rule_version_id is not None:
+                    cursor.execute(
+                        """
+                        SELECT
+                            version.id,
+                            version.estado_codigo,
+                            rule.condominio_id
+                        FROM financial_rule_versions version
+                        JOIN financial_rules rule
+                          ON rule.id=version.rule_id
+                        WHERE version.id=%s
+                        """,
+                        (rule_version_id,),
+                    )
+
+                    rule_version = cursor.fetchone()
+
+                    if not rule_version:
+                        raise ValueError(
+                            "FINANCIAL_RULE_VERSION_NOT_FOUND"
+                        )
+
+                    if (
+                        rule_version["estado_codigo"]
+                        != "APROBADO"
+                    ):
+                        raise ValueError(
+                            "FINANCIAL_FEE_REQUIRES_APPROVED_RULE_VERSION"
+                        )
+
+                    if (
+                        rule_version.get("condominio_id")
+                        is not None
+                        and rule_version["condominio_id"]
+                        != property_id
+                    ):
+                        raise ValueError(
+                            "FINANCIAL_FEE_RULE_SCOPE_MISMATCH"
+                        )
+
+                cursor.execute(
+                    """
+                    INSERT INTO space_fee_history(
+                        condominio_id,
+                        espacio_id,
+                        tipo_cuota_codigo,
+                        monto_mxn,
+                        vigente_desde,
+                        vigente_hasta,
+                        origen_codigo,
+                        rule_version_id,
+                        estado_codigo,
+                        creado_por,
+                        motivo_cambio
+                    )
+                    VALUES(
+                        %s,%s,%s,%s,%s,%s,
+                        %s,%s,'BORRADOR',%s,%s
+                    )
+                    RETURNING *
+                    """,
+                    (
+                        property_id,
+                        space_id,
+                        fee_type,
+                        amount,
+                        effective_from,
+                        effective_to,
+                        origin_code,
+                        rule_version_id,
+                        actor["id"],
+                        _optional_text(change_reason),
+                    ),
+                )
+
+                fee = dict(cursor.fetchone())
+
+                audit = _insert_audit(
+                    cursor,
+                    actor=actor,
+                    property_id=property_id,
+                    operation_type=(
+                        "FINANCIAL_SPACE_FEE_CREATED"
+                    ),
+                    entity="SPACE_FEE_HISTORY",
+                    entity_id=fee["id"],
+                    previous_status=None,
+                    new_status="BORRADOR",
+                    detail=change_reason,
+                    metadata={
+                        "espacio_id": space_id,
+                        "estructura_id": (
+                            space.get("estructura_id")
+                        ),
+                        "tipo_cuota_codigo": fee_type,
+                        "monto_mxn": amount,
+                        "vigente_desde": effective_from,
+                        "vigente_hasta": effective_to,
+                        "rule_version_id": (
+                            rule_version_id
+                        ),
+                    },
+                    trace_id=trace_id,
+                )
+
+            connection.commit()
+
+        except Exception:
+            connection.rollback()
+            raise
+
+    fee["audit_event_id"] = audit["id"]
+    fee["trace_id"] = trace_id
+
+    return fee
+
+
+def approve_space_fee_version(
+    *,
+    property_id,
+    fee_version_id,
+    actor_id,
+    approval_reason,
+):
+    actor = _require_actor(
+        actor_id,
+        "FINANZAS_CUOTA_GESTIONAR",
+        property_id,
+    )
+
+    approval_reason = _required_text(
+        approval_reason,
+        "FINANCIAL_APPROVAL_REASON_REQUIRED",
+    )
+
+    trace_id = new_trace_id()
+
+    with pool().connection() as connection:
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT *
+                    FROM space_fee_history
+                    WHERE id=%s
+                      AND condominio_id=%s
+                    FOR UPDATE
+                    """,
+                    (
+                        fee_version_id,
+                        property_id,
+                    ),
+                )
+
+                current = cursor.fetchone()
+
+                if not current:
+                    raise ValueError(
+                        "FINANCIAL_FEE_VERSION_NOT_FOUND"
+                    )
+
+                current = dict(current)
+
+                if (
+                    current["estado_codigo"]
+                    != "BORRADOR"
+                ):
+                    raise ValueError(
+                        "FINANCIAL_FEE_VERSION_NOT_APPROVABLE"
+                    )
+
+                cursor.execute(
+                    """
+                    UPDATE space_fee_history
+                    SET
+                        estado_codigo='APROBADO',
+                        aprobado_por=%s,
+                        aprobado_en=NOW(),
+                        motivo_cambio=%s
+                    WHERE id=%s
+                      AND condominio_id=%s
+                    RETURNING *
+                    """,
+                    (
+                        actor["id"],
+                        approval_reason,
+                        fee_version_id,
+                        property_id,
+                    ),
+                )
+
+                fee = dict(cursor.fetchone())
+
+                audit = _insert_audit(
+                    cursor,
+                    actor=actor,
+                    property_id=property_id,
+                    operation_type=(
+                        "FINANCIAL_SPACE_FEE_APPROVED"
+                    ),
+                    entity="SPACE_FEE_HISTORY",
+                    entity_id=fee_version_id,
+                    previous_status="BORRADOR",
+                    new_status="APROBADO",
+                    detail=approval_reason,
+                    metadata={
+                        "espacio_id": fee[
+                            "espacio_id"
+                        ],
+                        "tipo_cuota_codigo": fee[
+                            "tipo_cuota_codigo"
+                        ],
+                        "monto_mxn": fee[
+                            "monto_mxn"
+                        ],
+                        "vigente_desde": fee[
+                            "vigente_desde"
+                        ],
+                        "vigente_hasta": fee[
+                            "vigente_hasta"
+                        ],
+                        "rule_version_id": fee.get(
+                            "rule_version_id"
+                        ),
+                    },
+                    trace_id=trace_id,
+                )
+
+            connection.commit()
+
+        except Exception:
+            connection.rollback()
+            raise
+
+    fee["audit_event_id"] = audit["id"]
+    fee["trace_id"] = trace_id
+
+    return fee
+
+
+def request_financial_exception(
+    *,
+    property_id,
+    rule_version_id,
+    reason,
+    actor_id,
+    structure_id=None,
+    space_id=None,
+    exception_type=None,
+    parameters=None,
+    effective_from=None,
+    effective_to=None,
+):
+    actor = _require_actor(
+        actor_id,
+        "FINANZAS_EXCEPCION_SOLICITAR",
+        property_id,
+    )
+
+    reason = _required_text(
+        reason,
+        "FINANCIAL_EXCEPTION_REASON_REQUIRED",
+    )
+
+    exception_type = _optional_text(
+        exception_type,
+        80,
+    )
+
+    if (
+        effective_from is not None
+        or effective_to is not None
+    ):
+        if effective_from is None:
+            raise ValueError(
+                "INVALID_EFFECTIVE_FROM"
+            )
+
+        effective_from, effective_to = _valid_dates(
+            effective_from,
+            effective_to,
+        )
+
+    trace_id = new_trace_id()
+
+    with pool().connection() as connection:
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        version.id,
+                        version.estado_codigo,
+                        version.vigente_desde,
+                        version.vigente_hasta,
+                        rule.condominio_id,
+                        rule.estructura_id,
+                        rule.espacio_id,
+                        definition.admite_excepcion
+                    FROM financial_rule_versions version
+                    JOIN financial_rules rule
+                      ON rule.id=version.rule_id
+                    JOIN financial_rule_definitions definition
+                      ON definition.id=
+                         rule.rule_definition_id
+                    WHERE version.id=%s
+                    """,
+                    (rule_version_id,),
+                )
+
+                rule_version = cursor.fetchone()
+
+                if not rule_version:
+                    raise ValueError(
+                        "FINANCIAL_RULE_VERSION_NOT_FOUND"
+                    )
+
+                if (
+                    rule_version["estado_codigo"]
+                    != "APROBADO"
+                ):
+                    raise ValueError(
+                        "FINANCIAL_EXCEPTION_REQUIRES_APPROVED_RULE"
+                    )
+
+                if not rule_version[
+                    "admite_excepcion"
+                ]:
+                    raise ValueError(
+                        "FINANCIAL_RULE_EXCEPTION_NOT_ALLOWED"
+                    )
+
+                if (
+                    rule_version.get("condominio_id")
+                    is not None
+                    and rule_version["condominio_id"]
+                    != property_id
+                ):
+                    raise ValueError(
+                        "FINANCIAL_EXCEPTION_RULE_SCOPE_MISMATCH"
+                    )
+
+                cursor.execute(
+                    """
+                    INSERT INTO financial_rule_exceptions(
+                        condominio_id,
+                        estructura_id,
+                        espacio_id,
+                        rule_version_id,
+                        tipo_excepcion,
+                        parametros,
+                        motivo,
+                        estado_codigo,
+                        vigente_desde,
+                        vigente_hasta,
+                        solicitado_por
+                    )
+                    VALUES(
+                        %s,%s,%s,%s,%s,
+                        %s::jsonb,%s,'PENDIENTE',
+                        %s,%s,%s
+                    )
+                    RETURNING *
+                    """,
+                    (
+                        property_id,
+                        structure_id,
+                        space_id,
+                        rule_version_id,
+                        exception_type,
+                        _json(parameters),
+                        reason,
+                        effective_from,
+                        effective_to,
+                        actor["id"],
+                    ),
+                )
+
+                exception = dict(
+                    cursor.fetchone()
+                )
+
+                audit = _insert_audit(
+                    cursor,
+                    actor=actor,
+                    property_id=property_id,
+                    operation_type=(
+                        "FINANCIAL_EXCEPTION_REQUESTED"
+                    ),
+                    entity=(
+                        "FINANCIAL_RULE_EXCEPTION"
+                    ),
+                    entity_id=exception["id"],
+                    previous_status=None,
+                    new_status="PENDIENTE",
+                    detail=reason,
+                    metadata={
+                        "rule_version_id": (
+                            rule_version_id
+                        ),
+                        "estructura_id": (
+                            structure_id
+                        ),
+                        "espacio_id": space_id,
+                        "tipo_excepcion": (
+                            exception_type
+                        ),
+                        "vigente_desde": (
+                            effective_from
+                        ),
+                        "vigente_hasta": (
+                            effective_to
+                        ),
+                    },
+                    trace_id=trace_id,
+                )
+
+            connection.commit()
+
+        except Exception:
+            connection.rollback()
+            raise
+
+    exception["audit_event_id"] = (
+        audit["id"]
+    )
+    exception["trace_id"] = trace_id
+
+    return exception
+
+
+def resolve_financial_exception(
+    *,
+    property_id,
+    exception_id,
+    decision,
+    decision_detail,
+    actor_id,
+):
+    actor = _require_actor(
+        actor_id,
+        "FINANZAS_EXCEPCION_RESOLVER",
+        property_id,
+    )
+
+    decision = _required_text(
+        decision,
+        "FINANCIAL_EXCEPTION_DECISION_REQUIRED",
+        30,
+    ).upper()
+
+    if decision not in {
+        "APROBADA",
+        "RECHAZADA",
+    }:
+        raise ValueError(
+            "INVALID_FINANCIAL_EXCEPTION_DECISION"
+        )
+
+    decision_detail = _required_text(
+        decision_detail,
+        "FINANCIAL_EXCEPTION_DECISION_DETAIL_REQUIRED",
+    )
+
+    trace_id = new_trace_id()
+
+    with pool().connection() as connection:
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT *
+                    FROM financial_rule_exceptions
+                    WHERE id=%s
+                      AND condominio_id=%s
+                    FOR UPDATE
+                    """,
+                    (
+                        exception_id,
+                        property_id,
+                    ),
+                )
+
+                current = cursor.fetchone()
+
+                if not current:
+                    raise ValueError(
+                        "FINANCIAL_EXCEPTION_NOT_FOUND"
+                    )
+
+                current = dict(current)
+
+                if (
+                    current["estado_codigo"]
+                    != "PENDIENTE"
+                ):
+                    raise ValueError(
+                        "FINANCIAL_EXCEPTION_NOT_RESOLVABLE"
+                    )
+
+                cursor.execute(
+                    """
+                    UPDATE financial_rule_exceptions
+                    SET
+                        estado_codigo=%s,
+                        resuelto_por=%s,
+                        resuelto_en=NOW(),
+                        decision_detalle=%s
+                    WHERE id=%s
+                      AND condominio_id=%s
+                    RETURNING *
+                    """,
+                    (
+                        decision,
+                        actor["id"],
+                        decision_detail,
+                        exception_id,
+                        property_id,
+                    ),
+                )
+
+                exception = dict(
+                    cursor.fetchone()
+                )
+
+                audit = _insert_audit(
+                    cursor,
+                    actor=actor,
+                    property_id=property_id,
+                    operation_type=(
+                        "FINANCIAL_EXCEPTION_RESOLVED"
+                    ),
+                    entity=(
+                        "FINANCIAL_RULE_EXCEPTION"
+                    ),
+                    entity_id=exception_id,
+                    previous_status="PENDIENTE",
+                    new_status=decision,
+                    detail=decision_detail,
+                    metadata={
+                        "rule_version_id": (
+                            exception[
+                                "rule_version_id"
+                            ]
+                        ),
+                        "estructura_id": (
+                            exception.get(
+                                "estructura_id"
+                            )
+                        ),
+                        "espacio_id": (
+                            exception.get(
+                                "espacio_id"
+                            )
+                        ),
+                        "decision": decision,
+                    },
+                    trace_id=trace_id,
+                )
+
+            connection.commit()
+
+        except Exception:
+            connection.rollback()
+            raise
+
+    exception["audit_event_id"] = (
+        audit["id"]
+    )
+    exception["trace_id"] = trace_id
+
+    return exception

@@ -1,6 +1,1311 @@
-from components.ui import title
+from datetime import date
+from decimal import Decimal
+
+import pandas as pd
 import streamlit as st
 
+from components.ui import (
+    metrics,
+    property_header,
+    title,
+)
+from core.access import cid
+from core.authorization import authorize
+from core.formatting import money
+from services.catalogs import options
+from services.finance import (
+    account_statement,
+    cancel_movement,
+    create_charge,
+    financial_scope_options,
+    financial_scope_space_ids,
+    financial_summary,
+    list_charges,
+    list_expenses,
+    list_payments,
+    register_expense,
+    register_payment,
+)
+from services.spaces import list_spaces
+from services.financial_obligations import (
+    list_financial_obligations,
+)
+
+
+def _decision(user, permission, property_id):
+    return authorize(
+        user,
+        permission,
+        property_id,
+    )
+
+
+def _denied(permission):
+    st.warning(
+        "Sin permiso para esta operación: "
+        + permission
+    )
+
+
+def _space_options(
+    property_id,
+    allowed_space_ids=None,
+):
+    allowed = (
+        set(allowed_space_ids)
+        if allowed_space_ids is not None
+        else None
+    )
+
+    rows = [
+        row
+        for row in list_spaces(property_id)
+        if (
+            row.get("activo")
+            and (
+                allowed is None
+                or row["id"] in allowed
+            )
+        )
+    ]
+
+    mapping = {}
+
+    for row in rows:
+        label = (
+            f"{row.get('clave') or 'S/C'} · "
+            f"{row.get('nombre') or 'Sin nombre'}"
+        )
+
+        mapping[label] = row
+
+    return mapping
+
+
+
+
+def _scope_contract(
+    property_id,
+):
+    options = financial_scope_options(
+        property_id
+    )
+
+    mapping = {
+        option["label"]: option
+        for option in options
+    }
+
+    labels = list(mapping)
+
+    selected_label = st.selectbox(
+        "Alcance financiero",
+        labels,
+        key=f"finance_scope_{property_id}",
+        help=(
+            "Selecciona todo el inmueble, "
+            "espacios directos o una estructura."
+        ),
+    )
+
+    selected = mapping[
+        selected_label
+    ]
+
+    space_ids = financial_scope_space_ids(
+        property_id,
+        selected["kind"],
+        structure_id=selected.get(
+            "structure_id"
+        ),
+    )
+
+    return selected, set(space_ids)
+
+
+def _rows_in_scope(
+    rows,
+    allowed_space_ids,
+):
+    return [
+        row
+        for row in rows
+        if row.get("espacio_id")
+        in allowed_space_ids
+    ]
+
+
+def _scope_caption(scope):
+    if scope["kind"] == "ALL":
+        st.caption(
+            "Vista consolidada de todo el inmueble."
+        )
+        return
+
+    if scope["kind"] == "DIRECT":
+        st.caption(
+            "Vista limitada a espacios asociados "
+            "directamente al inmueble."
+        )
+        return
+
+    st.caption(
+        "Vista financiera aislada para la "
+        "estructura seleccionada y todos sus "
+        "descendientes."
+    )
+
+def _period_default():
+    today = date.today()
+    return f"{today.year:04d}-{today.month:02d}"
+
+
+def _summary_section(
+    property_id,
+    user,
+    period,
+    scope,
+    allowed_space_ids,
+):
+    if not _decision(
+        user,
+        "FINANZAS_CONSULTAR",
+        property_id,
+    ).allowed:
+        _denied("FINANZAS_CONSULTAR")
+        return
+
+    if scope["kind"] == "ALL":
+        summary = financial_summary(
+            property_id,
+            user["id"],
+            period or None,
+        )
+
+        metrics(
+            [
+                (
+                    "Cargos",
+                    money(summary["charges"]),
+                ),
+                (
+                    "Pagos",
+                    money(summary["payments"]),
+                ),
+                (
+                    "Pendiente",
+                    money(summary["pending"]),
+                ),
+                (
+                    "Gastos",
+                    money(summary["expenses"]),
+                ),
+                (
+                    "Disponible",
+                    money(
+                        summary[
+                            "available_balance"
+                        ]
+                    ),
+                ),
+            ]
+        )
+
+    else:
+        scoped_charges = _rows_in_scope(
+            list_charges(
+                property_id,
+                user["id"],
+                period=period or None,
+            ),
+            allowed_space_ids,
+        )
+
+        scoped_payments = _rows_in_scope(
+            list_payments(
+                property_id,
+                user["id"],
+                period=period or None,
+            ),
+            allowed_space_ids,
+        )
+
+        total_charges = sum(
+            Decimal(
+                str(row.get("monto_mxn") or 0)
+            )
+            for row in scoped_charges
+        )
+
+        total_payments = sum(
+            Decimal(
+                str(row.get("monto_mxn") or 0)
+            )
+            for row in scoped_payments
+        )
+
+        metrics(
+            [
+                (
+                    "Cargos",
+                    money(total_charges),
+                ),
+                (
+                    "Pagos",
+                    money(total_payments),
+                ),
+                (
+                    "Pendiente",
+                    money(
+                        max(
+                            total_charges
+                            - total_payments,
+                            Decimal("0"),
+                        )
+                    ),
+                ),
+            ]
+        )
+
+        st.info(
+            "Los gastos y el disponible no se "
+            "calculan para esta estructura porque "
+            "los gastos actuales pertenecen al "
+            "ámbito general del inmueble."
+        )
+
+    st.caption(
+        "Resumen transaccional. No representa todavía un KPI de sostenibilidad financiera."
+    )
+
+
+def _charges_section(
+    property_id,
+    user,
+    period,
+    spaces,
+    allowed_space_ids,
+):
+    can_read = _decision(
+        user,
+        "FINANZAS_CONSULTAR",
+        property_id,
+    ).allowed
+
+    if not can_read:
+        _denied("FINANZAS_CONSULTAR")
+        return
+
+    st.subheader("Cargos")
+
+    include_cancelled = st.checkbox(
+        "Mostrar cargos cancelados",
+        key=f"finance_charge_cancelled_{property_id}",
+    )
+
+    rows = list_charges(
+        property_id,
+        user["id"],
+        period=period or None,
+        include_cancelled=include_cancelled,
+    )
+
+    rows = _rows_in_scope(
+        rows,
+        allowed_space_ids,
+    )
+
+    display = pd.DataFrame(
+        [
+            {
+                "ID": row["id"],
+                "Periodo": row.get("periodo"),
+                "Espacio": (
+                    f"{row.get('espacio_clave') or ''} "
+                    f"{row.get('espacio_nombre') or ''}"
+                ).strip(),
+                "Tipo": row.get("tipo_codigo"),
+                "Concepto": row.get("concepto"),
+                "Monto": money(
+                    row.get("monto_mxn")
+                ),
+                "Estado": row.get("estado_codigo"),
+                "Referencia": (
+                    row.get("referencia") or ""
+                ),
+            }
+            for row in rows
+        ]
+    )
+
+    selected = None
+
+    if display.empty:
+        st.info(
+            "No existen cargos para los filtros "
+            "seleccionados."
+        )
+    else:
+        event = st.dataframe(
+            display,
+            hide_index=True,
+            use_container_width=True,
+            column_config={"ID": None},
+            on_select="rerun",
+            selection_mode="single-row",
+            key=f"finance_charge_grid_{property_id}",
+        )
+
+        indexes = list(
+            event.selection.rows or []
+        )
+
+        if indexes:
+            index = indexes[0]
+
+            if 0 <= index < len(rows):
+                selected = rows[index]
+
+    can_create = _decision(
+        user,
+        "FINANZAS_CARGO_CREAR",
+        property_id,
+    ).allowed
+
+    if can_create:
+        with st.expander(
+            "Registrar nuevo cargo",
+            expanded=False,
+        ):
+            if not spaces:
+                st.info(
+                    "No existen espacios activos "
+                    "para registrar cargos."
+                )
+            else:
+                charge_types = options(
+                    "TIPO_CARGO"
+                )
+
+                if not charge_types:
+                    st.error(
+                        "No está disponible el "
+                        "catálogo TIPO_CARGO."
+                    )
+                else:
+                    with st.form(
+                        f"finance_charge_create_{property_id}"
+                    ):
+                        labels = list(spaces)
+                        space_label = st.selectbox(
+                            "Espacio",
+                            labels,
+                        )
+
+                        period_value = st.text_input(
+                            "Periodo",
+                            value=(
+                                period
+                                or _period_default()
+                            ),
+                            placeholder="AAAA-MM",
+                        )
+
+                        type_label = st.selectbox(
+                            "Tipo de cargo",
+                            list(charge_types),
+                        )
+
+                        concept = st.text_input(
+                            "Concepto"
+                        )
+
+                        amount = st.number_input(
+                            "Monto",
+                            min_value=0.01,
+                            step=100.0,
+                            format="%.2f",
+                        )
+
+                        reference = st.text_input(
+                            "Referencia"
+                        )
+
+                        observations = st.text_area(
+                            "Observaciones"
+                        )
+
+                        submit = (
+                            st.form_submit_button(
+                                "Registrar Cargo",
+                                type="primary",
+                            )
+                        )
+
+                    if submit:
+                        try:
+                            space = spaces[
+                                space_label
+                            ]
+
+                            create_charge(
+                                property_id=property_id,
+                                space_id=space["id"],
+                                period=period_value,
+                                charge_type=(
+                                    charge_types[
+                                        type_label
+                                    ]
+                                ),
+                                concept=concept,
+                                amount=amount,
+                                actor_id=user["id"],
+                                reference=reference,
+                                observations=observations,
+                            )
+
+                            st.success(
+                                "Cargo registrado "
+                                "correctamente."
+                            )
+                            st.rerun()
+
+                        except Exception as exc:
+                            st.error(
+                                "No fue posible registrar "
+                                f"el cargo: {exc}"
+                            )
+
+    if (
+        selected
+        and selected.get("estado_codigo")
+        == "REGISTRADO"
+    ):
+        _cancellation_section(
+            property_id,
+            user,
+            "CARGO",
+            selected,
+        )
+
+
+def _payments_section(
+    property_id,
+    user,
+    period,
+    spaces,
+    allowed_space_ids,
+):
+    if not _decision(
+        user,
+        "FINANZAS_CONSULTAR",
+        property_id,
+    ).allowed:
+        _denied("FINANZAS_CONSULTAR")
+        return
+
+    st.subheader("Pagos")
+
+    include_cancelled = st.checkbox(
+        "Mostrar pagos cancelados",
+        key=f"finance_payment_cancelled_{property_id}",
+    )
+
+    rows = list_payments(
+        property_id,
+        user["id"],
+        period=period or None,
+        include_cancelled=include_cancelled,
+    )
+
+    rows = _rows_in_scope(
+        rows,
+        allowed_space_ids,
+    )
+
+    display = pd.DataFrame(
+        [
+            {
+                "ID": row["id"],
+                "Fecha": row.get("fecha"),
+                "Periodo": row.get("periodo"),
+                "Espacio": (
+                    f"{row.get('espacio_clave') or ''} "
+                    f"{row.get('espacio_nombre') or ''}"
+                ).strip(),
+                "Monto": money(
+                    row.get("monto_mxn")
+                ),
+                "Estado": row.get("estado_codigo"),
+                "Referencia": (
+                    row.get("referencia") or ""
+                ),
+            }
+            for row in rows
+        ]
+    )
+
+    selected = None
+
+    if display.empty:
+        st.info(
+            "No existen pagos para los filtros "
+            "seleccionados."
+        )
+    else:
+        event = st.dataframe(
+            display,
+            hide_index=True,
+            use_container_width=True,
+            column_config={"ID": None},
+            on_select="rerun",
+            selection_mode="single-row",
+            key=f"finance_payment_grid_{property_id}",
+        )
+
+        indexes = list(
+            event.selection.rows or []
+        )
+
+        if indexes:
+            index = indexes[0]
+
+            if 0 <= index < len(rows):
+                selected = rows[index]
+
+    can_create = _decision(
+        user,
+        "FINANZAS_PAGO_REGISTRAR",
+        property_id,
+    ).allowed
+
+    if can_create:
+        with st.expander(
+            "Registrar pago",
+            expanded=False,
+        ):
+            if not spaces:
+                st.info(
+                    "No existen espacios activos "
+                    "para registrar pagos."
+                )
+            else:
+                with st.form(
+                    f"finance_payment_create_{property_id}"
+                ):
+                    labels = list(spaces)
+
+                    space_label = st.selectbox(
+                        "Espacio",
+                        labels,
+                    )
+
+                    period_value = st.text_input(
+                        "Periodo",
+                        value=(
+                            period
+                            or _period_default()
+                        ),
+                        placeholder="AAAA-MM",
+                        key="finance_payment_period",
+                    )
+
+                    payment_date = st.date_input(
+                        "Fecha de pago",
+                        value=date.today(),
+                        max_value=date.today(),
+                        format="DD/MM/YYYY",
+                    )
+
+                    amount = st.number_input(
+                        "Monto",
+                        min_value=0.01,
+                        step=100.0,
+                        format="%.2f",
+                        key="finance_payment_amount",
+                    )
+
+                    reference = st.text_input(
+                        "Referencia",
+                        key="finance_payment_reference",
+                    )
+
+                    observations = st.text_area(
+                        "Observaciones",
+                        key="finance_payment_observations",
+                    )
+
+                    submit = (
+                        st.form_submit_button(
+                            "Registrar Pago",
+                            type="primary",
+                        )
+                    )
+
+                if submit:
+                    try:
+                        space = spaces[
+                            space_label
+                        ]
+
+                        register_payment(
+                            property_id=property_id,
+                            space_id=space["id"],
+                            period=period_value,
+                            payment_date=payment_date,
+                            amount=amount,
+                            actor_id=user["id"],
+                            reference=reference,
+                            observations=observations,
+                        )
+
+                        st.success(
+                            "Pago registrado "
+                            "correctamente."
+                        )
+                        st.rerun()
+
+                    except Exception as exc:
+                        st.error(
+                            "No fue posible registrar "
+                            f"el pago: {exc}"
+                        )
+
+    if (
+        selected
+        and selected.get("estado_codigo")
+        == "REGISTRADO"
+    ):
+        _cancellation_section(
+            property_id,
+            user,
+            "PAGO",
+            selected,
+        )
+
+
+def _expenses_section(
+    property_id,
+    user,
+    scope,
+):
+    if not _decision(
+        user,
+        "FINANZAS_CONSULTAR",
+        property_id,
+    ).allowed:
+        _denied("FINANZAS_CONSULTAR")
+        return
+
+    st.subheader("Gastos")
+
+    if scope["kind"] != "ALL":
+        st.info(
+            "Los gastos actuales son generales "
+            "del inmueble y no se atribuyen "
+            "automáticamente a una privada o "
+            "estructura."
+        )
+        return
+
+    include_cancelled = st.checkbox(
+        "Mostrar gastos cancelados",
+        key=f"finance_expense_cancelled_{property_id}",
+    )
+
+    rows = list_expenses(
+        property_id,
+        user["id"],
+        include_cancelled=include_cancelled,
+    )
+
+    display = pd.DataFrame(
+        [
+            {
+                "ID": row["id"],
+                "Fecha": row.get("fecha"),
+                "Categoría": (
+                    row.get(
+                        "categoria_codigo"
+                    )
+                ),
+                "Concepto": row.get("concepto"),
+                "Monto": money(
+                    row.get("monto_mxn")
+                ),
+                "Estado": row.get("estado_codigo"),
+                "Referencia": (
+                    row.get("referencia") or ""
+                ),
+            }
+            for row in rows
+        ]
+    )
+
+    selected = None
+
+    if display.empty:
+        st.info(
+            "No existen gastos registrados."
+        )
+    else:
+        event = st.dataframe(
+            display,
+            hide_index=True,
+            use_container_width=True,
+            column_config={"ID": None},
+            on_select="rerun",
+            selection_mode="single-row",
+            key=f"finance_expense_grid_{property_id}",
+        )
+
+        indexes = list(
+            event.selection.rows or []
+        )
+
+        if indexes:
+            index = indexes[0]
+
+            if 0 <= index < len(rows):
+                selected = rows[index]
+
+    can_create = _decision(
+        user,
+        "FINANZAS_GASTO_REGISTRAR",
+        property_id,
+    ).allowed
+
+    if can_create:
+        with st.expander(
+            "Registrar gasto",
+            expanded=False,
+        ):
+            categories = options(
+                "CATEGORIA_GASTO"
+            )
+
+            if not categories:
+                st.error(
+                    "No está disponible el "
+                    "catálogo CATEGORIA_GASTO."
+                )
+            else:
+                with st.form(
+                    f"finance_expense_create_{property_id}"
+                ):
+                    expense_date = st.date_input(
+                        "Fecha del gasto",
+                        value=date.today(),
+                        max_value=date.today(),
+                        format="DD/MM/YYYY",
+                    )
+
+                    category_label = st.selectbox(
+                        "Categoría",
+                        list(categories),
+                    )
+
+                    concept = st.text_input(
+                        "Concepto",
+                        key="finance_expense_concept",
+                    )
+
+                    amount = st.number_input(
+                        "Monto",
+                        min_value=0.01,
+                        step=100.0,
+                        format="%.2f",
+                        key="finance_expense_amount",
+                    )
+
+                    reference = st.text_input(
+                        "Referencia",
+                        key="finance_expense_reference",
+                    )
+
+                    observations = st.text_area(
+                        "Observaciones",
+                        key="finance_expense_observations",
+                    )
+
+                    submit = (
+                        st.form_submit_button(
+                            "Registrar Gasto",
+                            type="primary",
+                        )
+                    )
+
+                if submit:
+                    try:
+                        register_expense(
+                            property_id=property_id,
+                            expense_date=expense_date,
+                            category=categories[
+                                category_label
+                            ],
+                            concept=concept,
+                            amount=amount,
+                            actor_id=user["id"],
+                            reference=reference,
+                            observations=observations,
+                        )
+
+                        st.success(
+                            "Gasto registrado "
+                            "correctamente."
+                        )
+                        st.rerun()
+
+                    except Exception as exc:
+                        st.error(
+                            "No fue posible registrar "
+                            f"el gasto: {exc}"
+                        )
+
+    if (
+        selected
+        and selected.get("estado_codigo")
+        == "REGISTRADO"
+    ):
+        _cancellation_section(
+            property_id,
+            user,
+            "GASTO",
+            selected,
+        )
+
+
+def _cancellation_section(
+    property_id,
+    user,
+    movement_type,
+    movement,
+):
+    if not _decision(
+        user,
+        "FINANZAS_MOVIMIENTO_CANCELAR",
+        property_id,
+    ).allowed:
+        return
+
+    st.markdown("---")
+    st.markdown(
+        "**Cancelación del movimiento seleccionado**"
+    )
+
+    st.warning(
+        "La cancelación conserva el movimiento original y genera trazabilidad financiera."
+    )
+
+    reason = st.text_area(
+        "Motivo de cancelación",
+        key=(
+            f"finance_cancel_reason_"
+            f"{movement_type}_"
+            f"{movement['id']}"
+        ),
+    )
+
+    confirm = st.checkbox(
+        "Confirmo la cancelación del movimiento",
+        key=(
+            f"finance_cancel_confirm_"
+            f"{movement_type}_"
+            f"{movement['id']}"
+        ),
+    )
+
+    if st.button(
+        "Cancelar Movimiento",
+        disabled=not confirm,
+        key=(
+            f"finance_cancel_button_"
+            f"{movement_type}_"
+            f"{movement['id']}"
+        ),
+    ):
+        try:
+            cancel_movement(
+                property_id,
+                movement_type,
+                movement["id"],
+                reason,
+                user["id"],
+            )
+
+            st.success(
+                "Movimiento cancelado "
+                "correctamente."
+            )
+            st.rerun()
+
+        except Exception as exc:
+            st.error(
+                "No fue posible cancelar el "
+                f"movimiento: {exc}"
+            )
+
+
+def _statement_section(
+    property_id,
+    user,
+    period,
+    spaces,
+):
+    if not _decision(
+        user,
+        "FINANZAS_ESTADO_CUENTA",
+        property_id,
+    ).allowed:
+        _denied("FINANZAS_ESTADO_CUENTA")
+        return
+
+    st.subheader("Estado de Cuenta")
+
+    if not spaces:
+        st.info(
+            "No existen espacios activos para "
+            "consultar estados de cuenta."
+        )
+        return
+
+    labels = list(spaces)
+
+    selected_label = st.selectbox(
+        "Espacio",
+        labels,
+        key=f"finance_statement_space_{property_id}",
+    )
+
+    selected_space = spaces[
+        selected_label
+    ]
+
+    statement = account_statement(
+        property_id,
+        selected_space["id"],
+        user["id"],
+        period=period or None,
+    )
+
+    metrics(
+        [
+            (
+                "Cargos",
+                money(
+                    statement[
+                        "total_charges"
+                    ]
+                ),
+            ),
+            (
+                "Pagos",
+                money(
+                    statement[
+                        "total_payments"
+                    ]
+                ),
+            ),
+            (
+                "Saldo",
+                money(
+                    statement["balance"]
+                ),
+            ),
+        ]
+    )
+
+    movements = []
+
+    for row in statement["charges"]:
+        movements.append(
+            {
+                "Fecha": row.get(
+                    "fecha_movimiento"
+                ),
+                "Periodo": row.get("periodo"),
+                "Movimiento": "Cargo",
+                "Concepto": row.get("concepto"),
+                "Referencia": (
+                    row.get("referencia") or ""
+                ),
+                "Cargo": money(
+                    row.get("monto_mxn")
+                ),
+                "Pago": "",
+            }
+        )
+
+    for row in statement["payments"]:
+        movements.append(
+            {
+                "Fecha": row.get(
+                    "fecha_movimiento"
+                ),
+                "Periodo": row.get("periodo"),
+                "Movimiento": "Pago",
+                "Concepto": row.get("concepto"),
+                "Referencia": (
+                    row.get("referencia") or ""
+                ),
+                "Cargo": "",
+                "Pago": money(
+                    row.get("monto_mxn")
+                ),
+            }
+        )
+
+    if not movements:
+        st.info(
+            "El espacio seleccionado no tiene "
+            "movimientos para el periodo."
+        )
+        return
+
+    dataframe = pd.DataFrame(movements)
+
+    if "Fecha" in dataframe.columns:
+        dataframe = dataframe.sort_values(
+            by=["Fecha", "Movimiento"],
+            ascending=[True, True],
+            na_position="first",
+        )
+
+    st.dataframe(
+        dataframe,
+        hide_index=True,
+        use_container_width=True,
+    )
+
+
+
+def _obligations_section(
+    property_id,
+    user,
+    period,
+    allowed_space_ids,
+):
+    st.subheader("Obligaciones")
+
+    st.caption(
+        "Obligaciones financieras del periodo. "
+        "Vista únicamente de consulta."
+    )
+
+    actor_id = user.get("id")
+
+    if not actor_id:
+        st.warning(
+            "No se pudo identificar al usuario activo."
+        )
+        return
+
+    try:
+        rows = list_financial_obligations(
+            property_id=property_id,
+            actor_id=actor_id,
+            space_ids=sorted(allowed_space_ids),
+            period=period,
+        )
+    except PermissionError:
+        _denied("FINANZAS_GOBIERNO_CONSULTAR")
+        return
+
+    if not rows:
+        st.info(
+            "No hay obligaciones financieras "
+            "para el periodo y alcance seleccionados."
+        )
+        return
+
+    spaces_by_id = {
+        row["id"]: row
+        for row in list_spaces(property_id)
+    }
+
+    data = []
+
+    for row in rows:
+        space = spaces_by_id.get(
+            row["espacio_id"],
+            {},
+        )
+
+        data.append(
+            {
+                "Periodo": row["periodo"],
+                "Espacio": (
+                    space.get("clave")
+                    or space.get("nombre")
+                    or str(row["espacio_id"])
+                ),
+                "Concepto": row["concepto"],
+                "Importe": float(
+                    row["monto_original_mxn"] or 0
+                ),
+                "Aplicado": float(
+                    row["monto_aplicado_mxn"] or 0
+                ),
+                "Saldo": float(
+                    row["saldo_mxn"] or 0
+                ),
+                "Situación": row["situacion_codigo"],
+            }
+        )
+
+    st.dataframe(
+        pd.DataFrame(data),
+        hide_index=True,
+        use_container_width=True,
+    )
+
+
 def render():
-    title('Finanzas', 'Módulo reservado para un Build posterior de Condo-Smart')
-    st.info('La navegación financiera ya está integrada. La operación de cuotas, cargos, pagos, egresos, presupuestos, conciliación y estados de cuenta se habilitará en un Build posterior.')
+    property_id = cid()
+
+    if not property_id:
+        st.info(
+            "Selecciona un inmueble para "
+            "gestionar sus finanzas."
+        )
+        return
+
+    user = st.session_state.get(
+        "user",
+        {},
+    )
+
+    property_data = st.session_state.get(
+        "condominio",
+        {},
+    )
+
+    title(
+        "Finanzas",
+        property_data.get(
+            "nombre",
+            "Inmueble Activo",
+        ),
+    )
+
+    property_header(
+        property_data
+    )
+
+    if not _decision(
+        user,
+        "FINANZAS_CONSULTAR",
+        property_id,
+    ).allowed:
+        _denied("FINANZAS_CONSULTAR")
+        return
+
+    filter_col, clear_col = st.columns(
+        [2, 1]
+    )
+
+    period = filter_col.text_input(
+        "Periodo",
+        value=_period_default(),
+        placeholder="AAAA-MM",
+        key=f"finance_period_{property_id}",
+    ).strip()
+
+    if clear_col.button(
+        "Todos los periodos",
+        use_container_width=True,
+        key=f"finance_all_periods_{property_id}",
+    ):
+        st.session_state[
+            f"finance_period_{property_id}"
+        ] = ""
+        st.rerun()
+
+    if period:
+        if (
+            len(period) != 7
+            or period[4] != "-"
+            or not period[:4].isdigit()
+            or not period[5:].isdigit()
+            or not 1 <= int(period[5:]) <= 12
+        ):
+            st.warning(
+                "El periodo debe utilizar "
+                "el formato AAAA-MM."
+            )
+            return
+
+    scope, allowed_space_ids = (
+        _scope_contract(
+            property_id
+        )
+    )
+
+    _scope_caption(scope)
+
+    spaces = _space_options(
+        property_id,
+        allowed_space_ids,
+    )
+
+    tabs = st.tabs(
+        [
+            "Resumen",
+            "Obligaciones",
+            "Cargos",
+            "Pagos",
+            "Gastos",
+            "Estado De Cuenta",
+        ]
+    )
+
+
+    with tabs[0]:
+        _summary_section(
+            property_id,
+            user,
+            period,
+            scope,
+            allowed_space_ids,
+        )
+
+    with tabs[1]:
+        _obligations_section(
+            property_id,
+            user,
+            period,
+            allowed_space_ids,
+        )
+
+    with tabs[2]:
+        _charges_section(
+            property_id,
+            user,
+            period,
+            spaces,
+            allowed_space_ids,
+        )
+
+    with tabs[3]:
+        _payments_section(
+            property_id,
+            user,
+            period,
+            spaces,
+            allowed_space_ids,
+        )
+
+    with tabs[4]:
+        _expenses_section(
+            property_id,
+            user,
+            scope,
+        )
+
+    with tabs[5]:
+        _statement_section(
+            property_id,
+            user,
+            period,
+            spaces,
+        )
