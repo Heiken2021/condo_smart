@@ -10,6 +10,7 @@ from services.catalogs import options
 from services.media import validate
 from services.properties import list_properties, create_property, update_property, dependencies, deletable, delete_property, update_logo, delete_logo, update_cover, delete_cover, set_property_active, get_property
 from services.property_admins import list_admins, create_admin, revoke, reactivate, reset_password, get_admin, update_admin_profile, list_assignable_admins, assign_existing_admin, admin_delete_dependencies, delete_inactive_admin
+from views.property_service_catalog import render_property_service_catalog
 from services.property_structure import NODE_TYPES, list_nodes, create_node, update_node, set_node_active, node_path, node_dependencies, delete_node
 
 
@@ -262,7 +263,7 @@ def render():
         return
 
     if not st.session_state.get("property_create_mode"):
-        section_names = ["Datos Generales", "Estructura", "Administradores", "Identidad", "Áreas Comunes", "Planos", "Estado", "Eliminar"]
+        section_names = ["Datos Generales", "Estructura", "Servicios", "Administradores", "Identidad", "Áreas Comunes", "Planos", "Estado", "Eliminar"]
         section = st.radio(
             "Gestion Del Inmueble",
             section_names,
@@ -977,6 +978,29 @@ def render():
             delete_cover_confirm = c2.checkbox("Confirmo eliminar portada", key="delete_cover_confirm")
             if c2.button("Eliminar Portada", disabled=not (delete_cover_confirm and row.get("portada_data"))):
                 delete_cover(row["id"], user["id"]);audit("INMUEBLE_PORTADA_BAJA", "condominios", row["id"]);refresh_current_property(row["id"]);st.rerun()
+
+    if section == "Servicios":
+        from services.spaces import list_spaces
+
+        service_property = selected_row
+
+        service_spaces = {
+            (
+                space.get("clave")
+                or space.get("nombre")
+                or str(space["id"])
+            ): space
+            for space in list_spaces(
+                service_property["id"]
+            )
+            if space.get("activo")
+        }
+
+        render_property_service_catalog(
+            property_id=service_property["id"],
+            user=user,
+            spaces=service_spaces,
+        )
 
     if section == "Áreas Comunes":
         st.subheader("Áreas Comunes")

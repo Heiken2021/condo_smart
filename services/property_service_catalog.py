@@ -36,11 +36,18 @@ def list_property_services(
             service.codigo,
             service.nombre,
             service.descripcion,
+            service.categoria_id,
+            category.codigo AS category_code,
+            category.nombre AS category_name,
             service.categoria_codigo,
             service.activo,
             service.creado_en,
             service.actualizado_en
         FROM property_service_catalog service
+        LEFT JOIN property_service_categories category
+          ON category.id=service.categoria_id
+         AND category.condominio_id=
+             service.condominio_id
         WHERE service.condominio_id=%s
         {active_filter}
         ORDER BY
@@ -66,11 +73,18 @@ def get_property_service(
             service.codigo,
             service.nombre,
             service.descripcion,
+            service.categoria_id,
+            category.codigo AS category_code,
+            category.nombre AS category_name,
             service.categoria_codigo,
             service.activo,
             service.creado_en,
             service.actualizado_en
         FROM property_service_catalog service
+        LEFT JOIN property_service_categories category
+          ON category.id=service.categoria_id
+         AND category.condominio_id=
+             service.condominio_id
         WHERE service.id=%s
           AND service.condominio_id=%s
         """,
