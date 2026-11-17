@@ -155,3 +155,20 @@ def test_continuity_does_not_copy_source_values():
     for token in forbidden:
         assert token not in LIFECYCLE
         assert token not in COMMANDS
+
+
+def test_dependency_preview_accepts_definition_code():
+    start = LIFECYCLE.index(
+        "def _render_inherited_dependency_preview("
+    )
+    end = LIFECYCLE.index(
+        "\ndef ",
+        start + 5,
+    )
+    function = LIFECYCLE[start:end]
+
+    assert '"definition_code"' in function
+    assert (
+        "consumer_rule_code=rule_code"
+        in function
+    )

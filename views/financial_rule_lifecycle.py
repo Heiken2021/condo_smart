@@ -475,6 +475,8 @@ def _render_inherited_dependency_preview(
     ) or detail.get(
         "rule_code"
     ) or detail.get(
+        "definition_code"
+    ) or detail.get(
         "codigo"
     )
 
