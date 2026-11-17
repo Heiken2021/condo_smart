@@ -1,0 +1,344 @@
+-- ============================================================
+-- Condo_Smart · Build 02
+-- Migration 024
+-- Financial policy catalogue foundation
+--
+-- Same governed financial-rule engine.
+-- No operational rule/value is hardcoded here.
+-- This migration creates rule DEFINITIONS and APPLICABILITY.
+--
+-- It DOES NOT create:
+--   financial_rules
+--   financial_rule_versions
+--   obligations
+--   payments
+--   allocations
+--   fees
+-- ============================================================
+
+
+-- ============================================================
+-- PAGO MINIMO PARCIAL
+-- ============================================================
+
+INSERT INTO financial_rule_definitions (
+    codigo,
+    nombre,
+    descripcion,
+    dominio_codigo,
+    nivel_base_codigo,
+    tipo_resultado,
+    esquema_parametros,
+    obligatoria,
+    admite_especializacion,
+    admite_herencia,
+    admite_override,
+    admite_excepcion,
+    requiere_aprobacion,
+    permite_nivel_inmueble,
+    permite_nivel_estructura,
+    permite_nivel_espacio,
+    contexto_kpi,
+    contexto_ia,
+    activo
+)
+SELECT
+    'PAGO_MINIMO_PARCIAL',
+    'Pago mínimo parcial',
+    (
+        'Gobierna el porcentaje mínimo de una '
+        'obligación que debe cubrirse para '
+        'considerar cumplido el mínimo financiero.'
+    ),
+    'COBRANZA',
+    'CORE',
+    'POLICY',
+    jsonb_build_object(
+        'minimum_payment_percentage',
+        jsonb_build_object(
+            'type', 'number',
+            'minimum', 0,
+            'maximum', 100,
+            'unit', 'PERCENT'
+        ),
+        'minimum_compliance',
+        jsonb_build_object(
+            'type', 'boolean'
+        )
+    ),
+    FALSE,
+    TRUE,
+    TRUE,
+    TRUE,
+    TRUE,
+    TRUE,
+    TRUE,
+    TRUE,
+    TRUE,
+    TRUE,
+    TRUE,
+    TRUE
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM financial_rule_definitions
+    WHERE codigo='PAGO_MINIMO_PARCIAL'
+);
+
+
+INSERT INTO financial_rule_applicability (
+    rule_definition_id,
+    dimension_codigo,
+    valor_codigo,
+    incluido
+)
+SELECT
+    d.id,
+    'TIPO_INMUEBLE',
+    'FRACCIONAMIENTO',
+    TRUE
+FROM financial_rule_definitions d
+WHERE d.codigo='PAGO_MINIMO_PARCIAL'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM financial_rule_applicability a
+      WHERE
+          a.rule_definition_id=d.id
+          AND a.dimension_codigo='TIPO_INMUEBLE'
+          AND a.valor_codigo='FRACCIONAMIENTO'
+          AND a.incluido=TRUE
+  );
+
+
+-- ============================================================
+-- RECARGO POR MOROSIDAD
+-- ============================================================
+
+INSERT INTO financial_rule_definitions (
+    codigo,
+    nombre,
+    descripcion,
+    dominio_codigo,
+    nivel_base_codigo,
+    tipo_resultado,
+    esquema_parametros,
+    obligatoria,
+    admite_especializacion,
+    admite_herencia,
+    admite_override,
+    admite_excepcion,
+    requiere_aprobacion,
+    permite_nivel_inmueble,
+    permite_nivel_estructura,
+    permite_nivel_espacio,
+    contexto_kpi,
+    contexto_ia,
+    activo
+)
+SELECT
+    'RECARGO_MOROSIDAD',
+    'Recargo por morosidad',
+    (
+        'Gobierna el tratamiento financiero de '
+        'saldos pendientes después del vencimiento.'
+    ),
+    'COBRANZA',
+    'CORE',
+    'POLICY',
+    jsonb_build_object(
+        'surcharge_percentage',
+        jsonb_build_object(
+            'type', 'number',
+            'minimum', 0,
+            'maximum', 100,
+            'unit', 'PERCENT'
+        ),
+        'calculation_base',
+        jsonb_build_object(
+            'type', 'string',
+            'allowed', jsonb_build_array(
+                'SALDO_PENDIENTE',
+                'OBLIGACION_ORIGINAL'
+            )
+        ),
+        'grace_days',
+        jsonb_build_object(
+            'type', 'integer',
+            'minimum', 0
+        ),
+        'surcharge_frequency',
+        jsonb_build_object(
+            'type', 'string',
+            'allowed', jsonb_build_array(
+                'UNICA',
+                'DIARIA',
+                'MENSUAL'
+            )
+        ),
+        'maximum_surcharge_percentage',
+        jsonb_build_object(
+            'type', 'number',
+            'minimum', 0,
+            'maximum', 100,
+            'unit', 'PERCENT',
+            'optional', true
+        )
+    ),
+    FALSE,
+    TRUE,
+    TRUE,
+    TRUE,
+    TRUE,
+    TRUE,
+    TRUE,
+    TRUE,
+    TRUE,
+    TRUE,
+    TRUE,
+    TRUE
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM financial_rule_definitions
+    WHERE codigo='RECARGO_MOROSIDAD'
+);
+
+
+INSERT INTO financial_rule_applicability (
+    rule_definition_id,
+    dimension_codigo,
+    valor_codigo,
+    incluido
+)
+SELECT
+    d.id,
+    'TIPO_INMUEBLE',
+    'FRACCIONAMIENTO',
+    TRUE
+FROM financial_rule_definitions d
+WHERE d.codigo='RECARGO_MOROSIDAD'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM financial_rule_applicability a
+      WHERE
+          a.rule_definition_id=d.id
+          AND a.dimension_codigo='TIPO_INMUEBLE'
+          AND a.valor_codigo='FRACCIONAMIENTO'
+          AND a.incluido=TRUE
+  );
+
+
+-- ============================================================
+-- CONTINUIDAD DE SERVICIOS
+-- ============================================================
+
+INSERT INTO financial_rule_definitions (
+    codigo,
+    nombre,
+    descripcion,
+    dominio_codigo,
+    nivel_base_codigo,
+    tipo_resultado,
+    esquema_parametros,
+    obligatoria,
+    admite_especializacion,
+    admite_herencia,
+    admite_override,
+    admite_excepcion,
+    requiere_aprobacion,
+    permite_nivel_inmueble,
+    permite_nivel_estructura,
+    permite_nivel_espacio,
+    contexto_kpi,
+    contexto_ia,
+    activo
+)
+SELECT
+    'CONTINUIDAD_SERVICIOS',
+    'Continuidad de servicios',
+    (
+        'Gobierna criterios operativos asociados '
+        'al nivel de cumplimiento financiero, '
+        'sin modificar la deuda original.'
+    ),
+    'OPERACION',
+    'CORE',
+    'POLICY',
+    jsonb_build_object(
+        'minimum_coverage_percentage',
+        jsonb_build_object(
+            'type', 'number',
+            'minimum', 0,
+            'maximum', 100,
+            'unit', 'PERCENT'
+        ),
+        'tolerance_days',
+        jsonb_build_object(
+            'type', 'integer',
+            'minimum', 0
+        ),
+        'prior_notice_required',
+        jsonb_build_object(
+            'type', 'boolean'
+        ),
+        'authorization_required',
+        jsonb_build_object(
+            'type', 'boolean'
+        ),
+        'operational_action',
+        jsonb_build_object(
+            'type', 'string',
+            'allowed', jsonb_build_array(
+                'SIN_CAMBIO',
+                'REVISAR',
+                'RESTRINGIR_SEGUN_POLITICA'
+            )
+        )
+    ),
+    FALSE,
+    TRUE,
+    TRUE,
+    TRUE,
+    TRUE,
+    TRUE,
+    TRUE,
+    TRUE,
+    TRUE,
+    TRUE,
+    TRUE,
+    TRUE
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM financial_rule_definitions
+    WHERE codigo='CONTINUIDAD_SERVICIOS'
+);
+
+
+INSERT INTO financial_rule_applicability (
+    rule_definition_id,
+    dimension_codigo,
+    valor_codigo,
+    incluido
+)
+SELECT
+    d.id,
+    'TIPO_INMUEBLE',
+    'FRACCIONAMIENTO',
+    TRUE
+FROM financial_rule_definitions d
+WHERE d.codigo='CONTINUIDAD_SERVICIOS'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM financial_rule_applicability a
+      WHERE
+          a.rule_definition_id=d.id
+          AND a.dimension_codigo='TIPO_INMUEBLE'
+          AND a.valor_codigo='FRACCIONAMIENTO'
+          AND a.incluido=TRUE
+  );
+
+
+-- ============================================================
+-- Explicit non-goals
+-- ============================================================
+-- No operational percentage, surcharge value, grace period
+-- or operational consequence is fixed by this migration.
+-- Runtime values belong to governed financial_rule_versions.

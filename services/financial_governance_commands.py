@@ -148,6 +148,17 @@ def _json(value):
         value = {}
 
     return json.dumps(
+        value,
+        default=str,
+        ensure_ascii=False,
+    )
+
+
+def _audit_json(value):
+    if value is None:
+        value = {}
+
+    return json.dumps(
         sanitize(value),
         default=str,
         ensure_ascii=False,
@@ -204,7 +215,7 @@ def _insert_audit(
             previous_status,
             new_status,
             detail,
-            _json(metadata),
+            _audit_json(metadata),
             trace_id,
         ),
     )
@@ -1021,6 +1032,171 @@ def create_financial_rule(
     return rule
 
 
+
+def _validate_rule_parameters(
+    cursor,
+    *,
+    definition_id,
+    parameters,
+):
+    if not isinstance(parameters, dict):
+        raise ValueError(
+            "FINANCIAL_RULE_PARAMETERS_REQUIRED"
+        )
+
+    cursor.execute(
+        """
+        SELECT
+            codigo,
+            esquema_parametros
+        FROM financial_rule_definitions
+        WHERE id=%s
+          AND activo=TRUE
+        """,
+        (definition_id,),
+    )
+
+    definition = cursor.fetchone()
+
+    if not definition:
+        raise ValueError(
+            "FINANCIAL_RULE_DEFINITION_NOT_FOUND"
+        )
+
+    schema = (
+        definition["esquema_parametros"]
+        or {}
+    )
+
+    unknown = (
+        set(parameters)
+        - set(schema)
+    )
+
+    if unknown:
+        raise ValueError(
+            "UNKNOWN_FINANCIAL_RULE_PARAMETERS:"
+            + ",".join(sorted(unknown))
+        )
+
+    validated = {}
+
+    for code, specification in schema.items():
+        specification = (
+            specification
+            if isinstance(
+                specification,
+                dict,
+            )
+            else {}
+        )
+
+        optional = bool(
+            specification.get(
+                "optional",
+                False,
+            )
+        )
+
+        value = parameters.get(code)
+
+        if value is None:
+            if optional:
+                continue
+
+            raise ValueError(
+                "FINANCIAL_RULE_PARAMETER_REQUIRED:"
+                + code
+            )
+
+        parameter_type = (
+            specification.get("type")
+        )
+
+        if parameter_type == "number":
+            if (
+                isinstance(value, bool)
+                or not isinstance(
+                    value,
+                    (int, float),
+                )
+            ):
+                raise ValueError(
+                    "INVALID_NUMBER_PARAMETER:"
+                    + code
+                )
+
+            value = float(value)
+
+        elif parameter_type == "integer":
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+            ):
+                raise ValueError(
+                    "INVALID_INTEGER_PARAMETER:"
+                    + code
+                )
+
+        elif parameter_type == "boolean":
+            if not isinstance(value, bool):
+                raise ValueError(
+                    "INVALID_BOOLEAN_PARAMETER:"
+                    + code
+                )
+
+        elif parameter_type == "string":
+            if not isinstance(value, str):
+                raise ValueError(
+                    "INVALID_STRING_PARAMETER:"
+                    + code
+                )
+
+        minimum = specification.get(
+            "minimum"
+        )
+
+        maximum = specification.get(
+            "maximum"
+        )
+
+        if (
+            minimum is not None
+            and value < minimum
+        ):
+            raise ValueError(
+                "FINANCIAL_RULE_PARAMETER_BELOW_MINIMUM:"
+                + code
+            )
+
+        if (
+            maximum is not None
+            and value > maximum
+        ):
+            raise ValueError(
+                "FINANCIAL_RULE_PARAMETER_ABOVE_MAXIMUM:"
+                + code
+            )
+
+        allowed = (
+            specification.get("allowed")
+            or []
+        )
+
+        if (
+            allowed
+            and value not in allowed
+        ):
+            raise ValueError(
+                "FINANCIAL_RULE_PARAMETER_NOT_ALLOWED:"
+                + code
+            )
+
+        validated[code] = value
+
+    return validated
+
+
 def create_rule_version(
     *,
     property_id,
@@ -1061,6 +1237,7 @@ def create_rule_version(
                         id,
                         codigo,
                         condominio_id,
+                        rule_definition_id,
                         activo
                     FROM financial_rules
                     WHERE id=%s
@@ -1079,6 +1256,16 @@ def create_rule_version(
                     raise ValueError(
                         "FINANCIAL_RULE_NOT_FOUND"
                     )
+
+                parameters = (
+                    _validate_rule_parameters(
+                        cursor,
+                        definition_id=rule[
+                            "rule_definition_id"
+                        ],
+                        parameters=parameters,
+                    )
+                )
 
                 cursor.execute(
                     """
@@ -1144,6 +1331,351 @@ def create_rule_version(
     return version
 
 
+
+def update_rule_version_draft(
+    *,
+    property_id,
+    version_id,
+    effective_from,
+    parameters,
+    actor_id,
+    effective_to=None,
+    change_reason=None,
+):
+    actor = _require_actor(
+        actor_id,
+        "FINANZAS_REGLA_GESTIONAR",
+        property_id,
+    )
+
+    effective_from, effective_to = _valid_dates(
+        effective_from,
+        effective_to,
+    )
+
+    trace_id = new_trace_id()
+
+    with pool().connection() as connection:
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        version.*,
+                        rule.condominio_id,
+                        rule.rule_definition_id
+                    FROM financial_rule_versions version
+                    JOIN financial_rules rule
+                      ON rule.id=version.rule_id
+                    WHERE version.id=%s
+                      AND rule.condominio_id=%s
+                    FOR UPDATE
+                    """,
+                    (
+                        version_id,
+                        property_id,
+                    ),
+                )
+
+                current = cursor.fetchone()
+
+                if not current:
+                    raise ValueError(
+                        "FINANCIAL_RULE_VERSION_NOT_FOUND"
+                    )
+
+                current = dict(current)
+
+                if (
+                    current["estado_codigo"]
+                    != "BORRADOR"
+                ):
+                    raise ValueError(
+                        "FINANCIAL_RULE_VERSION_NOT_EDITABLE"
+                    )
+
+                parameters = (
+                    _validate_rule_parameters(
+                        cursor,
+                        definition_id=current[
+                            "rule_definition_id"
+                        ],
+                        parameters=parameters,
+                    )
+                )
+
+                before = {
+                    "vigente_desde":
+                        current["vigente_desde"],
+                    "vigente_hasta":
+                        current["vigente_hasta"],
+                    "parametros":
+                        current["parametros"],
+                    "motivo_cambio":
+                        current["motivo_cambio"],
+                }
+
+                cursor.execute(
+                    """
+                    UPDATE financial_rule_versions
+                    SET
+                        vigente_desde=%s,
+                        vigente_hasta=%s,
+                        parametros=%s::jsonb,
+                        motivo_cambio=%s
+                    WHERE id=%s
+                      AND estado_codigo='BORRADOR'
+                    RETURNING *
+                    """,
+                    (
+                        effective_from,
+                        effective_to,
+                        _json(parameters),
+                        _optional_text(
+                            change_reason
+                        ),
+                        version_id,
+                    ),
+                )
+
+                version = dict(
+                    cursor.fetchone()
+                )
+
+                after = {
+                    "vigente_desde":
+                        version["vigente_desde"],
+                    "vigente_hasta":
+                        version["vigente_hasta"],
+                    "parametros":
+                        version["parametros"],
+                    "motivo_cambio":
+                        version["motivo_cambio"],
+                }
+
+                audit = _insert_audit(
+                    cursor,
+                    actor=actor,
+                    property_id=property_id,
+                    operation_type=(
+                        "FINANCIAL_RULE_VERSION_"
+                        "DRAFT_UPDATED"
+                    ),
+                    entity=(
+                        "FINANCIAL_RULE_VERSION"
+                    ),
+                    entity_id=version_id,
+                    previous_status="BORRADOR",
+                    new_status="BORRADOR",
+                    detail=change_reason,
+                    metadata={
+                        "rule_id":
+                            version["rule_id"],
+                        "version_num":
+                            version[
+                                "version_num"
+                            ],
+                        "before": before,
+                        "after": after,
+                    },
+                    trace_id=trace_id,
+                )
+
+            connection.commit()
+
+        except Exception:
+            connection.rollback()
+            raise
+
+    version["audit_event_id"] = audit["id"]
+    version["trace_id"] = trace_id
+
+    return version
+
+
+
+def _validate_rule_dependencies_for_approval(
+    cursor,
+    *,
+    property_id,
+    current,
+):
+    cursor.execute(
+        """
+        SELECT
+            dependency.criterion_code,
+            dependency.criterion_label,
+            dependency.source_parameter_code,
+            dependency.required,
+            source.codigo
+                AS source_rule_code
+        FROM financial_rule_dependencies
+            dependency
+        JOIN financial_rule_definitions
+            consumer
+          ON consumer.id=
+            dependency.consumer_definition_id
+        JOIN financial_rule_definitions
+            source
+          ON source.id=
+            dependency.source_definition_id
+        WHERE consumer.codigo=%s
+          AND dependency.active=TRUE
+        ORDER BY dependency.id
+        """,
+        (
+            current["rule_code"],
+        ),
+    )
+
+    dependencies = [
+        dict(row)
+        for row in cursor.fetchall()
+    ]
+
+    resolved = []
+
+    for dependency in dependencies:
+        cursor.execute(
+            """
+            SELECT
+                source_rule.id AS rule_id,
+                source_version.id
+                    AS version_id,
+                source_version.version_num,
+                source_version.parametros,
+                source_rule.scope_level,
+                source_rule.prioridad
+            FROM financial_rules
+                source_rule
+            JOIN financial_rule_definitions
+                source_definition
+              ON source_definition.id=
+                source_rule.rule_definition_id
+            JOIN financial_rule_versions
+                source_version
+              ON source_version.rule_id=
+                source_rule.id
+            WHERE
+                source_definition.codigo=%s
+                AND source_definition.activo=TRUE
+                AND source_rule.activo=TRUE
+                AND source_rule.condominio_id=%s
+                AND source_version.estado_codigo=
+                    'APROBADO'
+                AND source_version.vigente_desde
+                    <= %s
+                AND (
+                    source_version.vigente_hasta
+                        IS NULL
+                    OR source_version.vigente_hasta
+                        >= %s
+                )
+            ORDER BY
+                CASE source_rule.scope_level
+                    WHEN 'ESPACIO' THEN 500
+                    WHEN 'ESTRUCTURA' THEN 400
+                    WHEN 'INMUEBLE' THEN 300
+                    WHEN 'TIPOLOGIA' THEN 200
+                    ELSE 100
+                END DESC,
+                source_rule.prioridad DESC,
+                source_version.version_num DESC,
+                source_version.id DESC
+            LIMIT 1
+            FOR UPDATE OF source_version
+            """,
+            (
+                dependency[
+                    "source_rule_code"
+                ],
+                property_id,
+                current["vigente_desde"],
+                current["vigente_desde"],
+            ),
+        )
+
+        source = cursor.fetchone()
+
+        value = None
+
+        if source:
+            source = dict(source)
+
+            parameters = (
+                source.get("parametros")
+                or {}
+            )
+
+            value = parameters.get(
+                dependency[
+                    "source_parameter_code"
+                ]
+            )
+
+        if (
+            dependency["required"]
+            and (
+                not source
+                or value is None
+            )
+        ):
+            raise ValueError(
+                "FINANCIAL_RULE_DEPENDENCY_"
+                "NOT_EFFECTIVE:"
+                + dependency[
+                    "source_rule_code"
+                ]
+                + ":"
+                + dependency[
+                    "source_parameter_code"
+                ]
+            )
+
+        resolved.append(
+            {
+                "criterion_code": (
+                    dependency[
+                        "criterion_code"
+                    ]
+                ),
+                "criterion_label": (
+                    dependency[
+                        "criterion_label"
+                    ]
+                ),
+                "source_rule_code": (
+                    dependency[
+                        "source_rule_code"
+                    ]
+                ),
+                "source_parameter_code": (
+                    dependency[
+                        "source_parameter_code"
+                    ]
+                ),
+                "source_rule_id": (
+                    source["rule_id"]
+                    if source
+                    else None
+                ),
+                "source_version_id": (
+                    source["version_id"]
+                    if source
+                    else None
+                ),
+                "source_version_num": (
+                    source["version_num"]
+                    if source
+                    else None
+                ),
+                "inherited_value": value,
+            }
+        )
+
+    return resolved
+
+
 def approve_rule_version(
     *,
     property_id,
@@ -1203,6 +1735,14 @@ def approve_rule_version(
                         "FINANCIAL_RULE_VERSION_NOT_APPROVABLE"
                     )
 
+                resolved_dependencies = (
+                    _validate_rule_dependencies_for_approval(
+                        cursor,
+                        property_id=property_id,
+                        current=current,
+                    )
+                )
+
                 cursor.execute(
                     """
                     UPDATE financial_rule_versions
@@ -1246,6 +1786,9 @@ def approve_rule_version(
                         "vigente_hasta": version[
                             "vigente_hasta"
                         ],
+                        "resolved_dependencies": (
+                            resolved_dependencies
+                        ),
                     },
                     trace_id=trace_id,
                 )

@@ -46,6 +46,22 @@ class FakeCursor:
             return
 
         if (
+            "SELECT codigo, esquema_parametros"
+            in normalized
+            and "FROM financial_rule_definitions"
+            in normalized
+        ):
+            self.current = {
+                "codigo": "TEST_RULE",
+                "esquema_parametros": {
+                    "policy": {
+                        "type": "string",
+                    }
+                },
+            }
+            return
+
+        if (
             "INSERT INTO financial_rules"
             in normalized
         ):
@@ -67,15 +83,18 @@ class FakeCursor:
             return
 
         if (
-            "SELECT id, codigo, condominio_id, activo"
+            "FROM financial_rules"
             in normalized
-            and "FROM financial_rules"
+            and "condominio_id"
+            in normalized
+            and "activo=TRUE"
             in normalized
         ):
             self.current = {
                 "id": 101,
                 "codigo": "TEST_RULE",
                 "condominio_id": 1,
+                "rule_definition_id": 10,
                 "activo": True,
             }
             return
@@ -119,6 +138,13 @@ class FakeCursor:
             return
 
         if (
+            "FROM financial_rule_dependencies"
+            in normalized
+        ):
+            self.current = []
+            return
+
+        if (
             "UPDATE financial_rule_versions"
             in normalized
             and "estado_codigo='APROBADO'"
@@ -152,6 +178,18 @@ class FakeCursor:
 
     def fetchone(self):
         return self.current
+
+    def fetchall(self):
+        if self.current is None:
+            return []
+
+        if isinstance(
+            self.current,
+            list,
+        ):
+            return self.current
+
+        return [self.current]
 
 
 class FakeConnection:

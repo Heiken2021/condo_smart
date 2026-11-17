@@ -27,6 +27,7 @@ from services.finance import (
     register_payment,
 )
 from services.spaces import list_spaces
+from views.financial_governance import render_governance_section
 from services.financial_obligations import (
     list_financial_obligations,
 )
@@ -1252,6 +1253,7 @@ def render():
         [
             "Resumen",
             "Obligaciones",
+            "Gobierno",
             "Cargos",
             "Pagos",
             "Gastos",
@@ -1278,6 +1280,13 @@ def render():
         )
 
     with tabs[2]:
+        render_governance_section(
+            property_id=property_id,
+            user=user,
+            spaces=spaces,
+        )
+
+    with tabs[3]:
         _charges_section(
             property_id,
             user,
@@ -1286,7 +1295,7 @@ def render():
             allowed_space_ids,
         )
 
-    with tabs[3]:
+    with tabs[4]:
         _payments_section(
             property_id,
             user,
@@ -1295,14 +1304,14 @@ def render():
             allowed_space_ids,
         )
 
-    with tabs[4]:
+    with tabs[5]:
         _expenses_section(
             property_id,
             user,
             scope,
         )
 
-    with tabs[5]:
+    with tabs[6]:
         _statement_section(
             property_id,
             user,

@@ -1,0 +1,102 @@
+from pathlib import Path
+
+
+MIGRATION = Path(
+    "database/migrations/"
+    "023_financial_rule_catalog_build02.sql"
+).read_text(encoding="utf-8")
+
+
+def test_migration_023_exists():
+    assert (
+        "023_financial_rule_catalog_build02.sql"
+        in str(
+            Path(
+                "database/migrations/"
+                "023_financial_rule_catalog_build02.sql"
+            )
+        )
+    )
+
+
+def test_catalog_contains_maintenance_definition():
+    assert (
+        "'MANTENIMIENTO_ORDINARIO'"
+        in MIGRATION
+    )
+    assert (
+        "'Mantenimiento ordinario'"
+        in MIGRATION
+    )
+
+
+def test_catalog_has_financial_domain():
+    assert "'OBLIGACIONES'" in MIGRATION
+    assert "'POLICY'" in MIGRATION
+
+
+def test_catalog_supports_governed_hierarchy():
+    required_tokens = (
+        "admite_herencia",
+        "admite_override",
+        "admite_excepcion",
+        "requiere_aprobacion",
+        "permite_nivel_inmueble",
+        "permite_nivel_estructura",
+        "permite_nivel_espacio",
+    )
+
+    for token in required_tokens:
+        assert token in MIGRATION
+
+
+def test_catalog_enables_kpi_and_ai_context():
+    assert "contexto_kpi" in MIGRATION
+    assert "contexto_ia" in MIGRATION
+
+
+def test_catalog_is_applicable_to_property_type():
+    assert "'TIPO_INMUEBLE'" in MIGRATION
+    assert "'FRACCIONAMIENTO'" in MIGRATION
+
+
+def test_catalog_has_parameter_schema():
+    assert "esquema_parametros" in MIGRATION
+    assert "'amount'" in MIGRATION
+    assert "'frequency'" in MIGRATION
+    assert "'due_day'" in MIGRATION
+
+
+def test_catalog_is_idempotent():
+    assert MIGRATION.count(
+        "NOT EXISTS"
+    ) >= 2
+
+
+def test_catalog_does_not_create_configured_rules():
+    forbidden = (
+        "INSERT INTO financial_rules ",
+        "INSERT INTO financial_rule_versions ",
+        "INSERT INTO financial_rule_exceptions ",
+        "INSERT INTO space_fee_history ",
+        "INSERT INTO financial_obligations ",
+        "INSERT INTO payment_allocations ",
+    )
+
+    for token in forbidden:
+        assert token not in MIGRATION
+
+
+def test_catalog_has_no_destructive_sql():
+    forbidden = (
+        "DROP TABLE",
+        "DROP COLUMN",
+        "TRUNCATE",
+        "DELETE FROM",
+        "ALTER COLUMN",
+    )
+
+    upper_migration = MIGRATION.upper()
+
+    for token in forbidden:
+        assert token not in upper_migration

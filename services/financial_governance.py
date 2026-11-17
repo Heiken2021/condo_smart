@@ -494,28 +494,14 @@ def _approved_candidates(
             candidates.append(candidate)
             continue
 
-        if (
-            candidate["scope_level"]
-            in {
-                "INMUEBLE",
-                "ESTRUCTURA",
-                "ESPACIO",
-            }
-            and not candidate.get(
+        candidate["eligible"] = True
+
+        candidate["resolution_reason"] = (
+            "ELIGIBLE_OVERRIDE"
+            if candidate.get(
                 "es_override"
             )
-        ):
-            candidate["eligible"] = False
-            candidate["resolution_reason"] = (
-                "SPECIFIC_RULE_REQUIRES_OVERRIDE"
-            )
-            candidate["scope_rank"] = rank
-            candidates.append(candidate)
-            continue
-
-        candidate["eligible"] = True
-        candidate["resolution_reason"] = (
-            "ELIGIBLE"
+            else "ELIGIBLE_BASE_CONFIGURATION"
         )
         candidate["scope_rank"] = rank
         candidates.append(candidate)

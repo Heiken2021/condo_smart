@@ -81,9 +81,25 @@ def test_resolver_uses_only_approved_effective_versions():
     assert "version.vigente_hasta >= %s" in SERVICE
 
 
-def test_resolver_requires_specific_rules_to_be_overrides():
+def test_resolver_supports_base_and_override_configurations():
     assert (
         "SPECIFIC_RULE_REQUIRES_OVERRIDE"
+        not in SERVICE
+    )
+
+    assert (
+        "ELIGIBLE_BASE_CONFIGURATION"
+        in SERVICE
+    )
+
+    assert (
+        "ELIGIBLE_OVERRIDE"
+        in SERVICE
+    )
+
+    assert (
+        'candidate.get(\n'
+        '                "es_override"'
         in SERVICE
     )
 

@@ -1,0 +1,156 @@
+from pathlib import Path
+
+
+LIFECYCLE = Path(
+    "views/financial_rule_lifecycle.py"
+).read_text(encoding="utf-8")
+
+COMMANDS = Path(
+    "services/financial_governance_commands.py"
+).read_text(encoding="utf-8")
+
+
+def test_draft_editor_is_connected():
+    assert (
+        "update_rule_version_draft,"
+        in LIFECYCLE
+    )
+
+    assert (
+        "def _render_edit_draft("
+        in LIFECYCLE
+    )
+
+
+def test_edit_button_requires_draft():
+    assert (
+        '"Editar borrador"'
+        in LIFECYCLE
+    )
+
+    assert (
+        "or draft is None"
+        in LIFECYCLE
+    )
+
+
+def test_edit_action_is_connected():
+    assert (
+        'action == "EDIT_DRAFT"'
+        in LIFECYCLE
+    )
+
+    assert (
+        "_render_edit_draft("
+        in LIFECYCLE
+    )
+
+
+def test_editor_delegates_business_fields_to_dynamic_renderer():
+    assert (
+        "render_parameter_inputs("
+        in LIFECYCLE
+    )
+
+    editor = Path(
+        "services/"
+        "financial_dynamic_parameter_editor.py"
+    ).read_text(encoding="utf-8")
+
+    for label in (
+        "Importe",
+        "Frecuencia",
+        "Día de vencimiento",
+    ):
+        assert label in editor
+
+    assert (
+        "minimum_payment_percentage"
+        in editor
+    )
+
+    assert (
+        "surcharge_percentage"
+        in editor
+    )
+
+    assert (
+        "minimum_coverage_percentage"
+        in editor
+    )
+
+def test_editor_explains_draft_rules():
+    assert (
+        "Puedes modificar los valores mientras "
+        in LIFECYCLE
+    )
+
+    assert (
+        "la versión permanezca en Borrador."
+        in LIFECYCLE
+    )
+
+    assert (
+        "Después de aprobarla"
+        in LIFECYCLE
+    )
+
+    assert (
+        "cualquier cambio "
+        in LIFECYCLE
+    )
+
+    assert (
+        "mediante una nueva "
+        in LIFECYCLE
+    )
+
+    assert (
+        "versión."
+        in LIFECYCLE
+    )
+
+
+def test_dynamic_validation_is_connected():
+    assert (
+        "def _validate_rule_parameters("
+        in COMMANDS
+    )
+
+    assert (
+        "esquema_parametros"
+        in COMMANDS
+    )
+
+    assert (
+        "FINANCIAL_RULE_PARAMETER_"
+        in COMMANDS
+    )
+
+
+def test_dynamic_validation_checks_limits():
+    for token in (
+        "minimum",
+        "maximum",
+        "allowed",
+        "optional",
+    ):
+        assert token in COMMANDS
+
+
+def test_dynamic_validation_rejects_unknown_parameters():
+    assert (
+        "UNKNOWN_FINANCIAL_RULE_PARAMETERS:"
+        in COMMANDS
+    )
+
+
+def test_business_percentages_are_not_hardcoded():
+    forbidden = (
+        "minimum_payment_percentage = 80",
+        "pending_percentage = 20",
+        "surcharge_percentage =",
+    )
+
+    for token in forbidden:
+        assert token not in COMMANDS
