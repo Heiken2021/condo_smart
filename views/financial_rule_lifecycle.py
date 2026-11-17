@@ -8,6 +8,9 @@ from services.financial_dynamic_parameter_editor import (
     parameter_label,
     render_parameter_inputs,
 )
+from services.financial_rule_audit import (
+    financial_rule_audit_rows,
+)
 from services.financial_rule_dependencies import (
     dependency_preview_rows,
     preview_rule_dependencies,
@@ -941,6 +944,113 @@ def _render_edit_draft(
     st.rerun()
 
 
+
+def _render_rule_audit(
+    *,
+    property_id,
+    detail,
+):
+    rule_id = detail.get("rule_id")
+
+    if rule_id is None:
+        st.info(
+            "La definición todavía no tiene una "
+            "configuración de regla que auditar."
+        )
+        return
+
+    st.markdown(
+        "### Gobierno y auditoría"
+    )
+
+    st.caption(
+        "Esta trazabilidad reúne las operaciones "
+        "gobernadas de la regla y de sus versiones. "
+        "Los eventos se presentan del más reciente "
+        "al más antiguo."
+    )
+
+    rows = financial_rule_audit_rows(
+        property_id=property_id,
+        rule_id=rule_id,
+    )
+
+    if not rows:
+        st.info(
+            "Todavía no hay eventos de auditoría "
+            "registrados para esta regla."
+        )
+        return
+
+    st.metric(
+        "Eventos registrados",
+        len(rows),
+    )
+
+    for row in rows:
+        with st.container(border=True):
+            left, right = st.columns(
+                [2.2, 1]
+            )
+
+            with left:
+                st.markdown(
+                    f"#### {row['evento']}"
+                )
+
+                st.write(
+                    f"**{row['version']}**"
+                )
+
+                st.write(
+                    "**Actor:** "
+                    + row["actor"]
+                )
+
+                st.write(
+                    "**Cambio de estado:** "
+                    + row["transicion"]
+                )
+
+                st.write(
+                    "**Motivo:** "
+                    + row["motivo"]
+                )
+
+            with right:
+                st.write(
+                    "**Fecha:**"
+                )
+                st.write(
+                    row["fecha"].strftime(
+                        "%d/%m/%Y %H:%M"
+                    )
+                    if row["fecha"] is not None
+                    else "Sin fecha"
+                )
+
+                st.write(
+                    "**Identificador de "
+                    "trazabilidad:**"
+                )
+                st.code(
+                    row["trace_id"],
+                    language=None,
+                )
+
+            if row["dependencias"]:
+                st.markdown(
+                    "**Dependencias utilizadas "
+                    "en la aprobación**"
+                )
+
+                for dependency in (
+                    row["dependencias"]
+                ):
+                    st.write(
+                        "• " + dependency
+                    )
+
 def _render_approval(
     *,
     property_id,
@@ -1306,12 +1416,9 @@ def render_rule_lifecycle_actions(
         )
 
     elif action == "AUDIT":
-        st.info(
-            "La auditoría consolidada de esta "
-            "regla se incorporará en el siguiente "
-            "bloque de trazabilidad. Las operaciones "
-            "del lifecycle ya generan auditoría "
-            "mediante los comandos gobernados."
+        _render_rule_audit(
+            property_id=property_id,
+            detail=detail,
         )
 
 DEFINITION_HELP = {
