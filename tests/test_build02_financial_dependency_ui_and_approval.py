@@ -172,3 +172,29 @@ def test_dependency_preview_accepts_definition_code():
         "consumer_rule_code=rule_code"
         in function
     )
+
+
+def test_dependency_preview_reports_ready_state():
+    start = LIFECYCLE.index(
+        "def _render_inherited_dependency_preview("
+    )
+    end = LIFECYCLE.index(
+        "\ndef ",
+        start + 5,
+    )
+    function = LIFECYCLE[start:end]
+
+    assert "unresolved_required" in function
+    assert '"ready_for_approval"' in function
+    assert (
+        "Todas las dependencias requeridas "
+        in function
+    )
+    assert (
+        "están aprobadas y efectivas."
+        in function
+    )
+    assert (
+        "quedará bloqueada mientras "
+        in function
+    )

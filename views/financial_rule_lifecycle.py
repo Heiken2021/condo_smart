@@ -564,12 +564,27 @@ def _render_inherited_dependency_preview(
                     "dispone de un valor resoluble."
                 )
 
-    st.caption(
-        "La aprobación de Continuidad de "
-        "servicios quedará bloqueada mientras "
-        "falte una dependencia requerida "
-        "aprobada y efectiva."
-    )
+    unresolved_required = [
+        item
+        for item in preview
+        if (
+            item["required"]
+            and not item["ready_for_approval"]
+        )
+    ]
+
+    if unresolved_required:
+        st.caption(
+            "La aprobación de Continuidad de "
+            "servicios quedará bloqueada mientras "
+            "falte una dependencia requerida "
+            "aprobada y efectiva."
+        )
+    else:
+        st.success(
+            "Todas las dependencias requeridas "
+            "están aprobadas y efectivas."
+        )
 
     return preview
 
