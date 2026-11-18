@@ -228,6 +228,27 @@ def _render_financial_summary(rows, user):
         )
 
 
+def _render_managed_properties_grid(rows):
+    totals = portfolio_totals(rows)
+
+    st.markdown("#### Snapshot De Inmuebles Administrados")
+    st.caption(
+        "Vista informativa. El contenido se limita "
+        "automáticamente al alcance autorizado."
+    )
+    st.dataframe(
+        _portfolio_grid(rows),
+        use_container_width=True,
+        hide_index=True,
+    )
+    if totals["inmuebles_inactivos"]:
+        st.warning(
+            "El portafolio contiene "
+            f"{totals['inmuebles_inactivos']} "
+            "inmueble(s) inactivo(s)."
+        )
+
+
 def _render_management_snapshot(rows):
     totals = portfolio_totals(rows)
 
@@ -379,26 +400,6 @@ def _render_management_snapshot(rows):
                 key="mi_gestion_occupancy",
             )
 
-    st.divider()
-    st.markdown("#### Snapshot De Inmuebles Administrados")
-
-    st.caption(
-        "Vista informativa. El contenido se limita "
-        "automáticamente al alcance autorizado."
-    )
-
-    st.dataframe(
-        _portfolio_grid(rows),
-        use_container_width=True,
-        hide_index=True,
-    )
-
-    if totals["inmuebles_inactivos"]:
-        st.warning(
-            "El portafolio contiene "
-            f"{totals['inmuebles_inactivos']} "
-            "inmueble(s) inactivo(s)."
-        )
 
 
 def render():
@@ -433,16 +434,23 @@ def render():
         )
         return
 
-    if legacy_rows:
-        _render_financial_summary(
-            legacy_rows,
-            user,
+    if snapshot_rows:
+        _render_managed_properties_grid(
+            snapshot_rows,
         )
 
         st.divider()
 
+    if legacy_rows:
         _render_property_cards(
             legacy_rows,
+        )
+
+        st.divider()
+
+        _render_financial_summary(
+            legacy_rows,
+            user,
         )
 
     if snapshot_rows:

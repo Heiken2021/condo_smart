@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from core.authorization import authorize
+from views.financial_rule_visual_builder import render_rule_visual_builder
 from views.financial_rule_lifecycle import (
     render_definition_fields,
     render_governance_attributes,
@@ -20,8 +21,14 @@ from services.financial_rule_presenter import (
     configured_parameter_rows,
     parameter_schema_rows,
 )
+from services.financial_governance_commands import (
+    create_financial_rule_definition,
+    set_financial_rule_applicability,
+)
 from services.financial_rules_grid import (
     get_financial_rule_detail,
+    list_global_financial_rule_catalog,
+    suggest_financial_rule_code,
     list_financial_exception_grid,
     list_financial_rule_grid,
     list_space_fee_grid,
@@ -43,6 +50,16 @@ def _date(value):
     )
 
 
+def _suggest_business_code(value):
+    import re
+    import unicodedata
+
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = re.sub(r"[^A-Za-z0-9]+", "_", text.upper()).strip("_")
+    return text[:100]
+
+
 def _rule_key(row):
     return (
         row["definition_id"],
@@ -56,6 +73,11 @@ def _render_rules(
     user,
 ):
     st.markdown("### Reglas de negocio")
+
+    _render_dynamic_rule_catalog(property_id=property_id, user=user)
+
+    st.divider()
+    st.markdown("#### Configuración del inmueble")
 
     st.caption(
         "Reglas compatibles con la naturaleza "
@@ -71,8 +93,9 @@ def _render_rules(
 
     if not rows:
         st.info(
-            "No existen definiciones de reglas "
-            "compatibles con este inmueble."
+            "Actualmente no hay reglas compatibles asignables para esta tipología. "
+            "Puedes crear una nueva regla global, ampliar la aplicabilidad de una regla "
+            "existente o crear una regla propia para este inmueble."
         )
         return
 
@@ -80,8 +103,10 @@ def _render_rules(
         "TODOS",
         *sorted(
             {
-                row["dominio_codigo"]
+                row.get("dominio_codigo")
                 for row in rows
+                if isinstance(row.get("dominio_codigo"), str)
+                and row.get("dominio_codigo").strip()
             }
         ),
     ]
@@ -90,8 +115,10 @@ def _render_rules(
         "TODOS",
         *sorted(
             {
-                row["status"]
+                row.get("status")
                 for row in rows
+                if isinstance(row.get("status"), str)
+                and row.get("status").strip()
             }
         ),
     ]
@@ -100,8 +127,10 @@ def _render_rules(
         "TODOS",
         *sorted(
             {
-                row["scope"]
+                row.get("scope")
                 for row in rows
+                if isinstance(row.get("scope"), str)
+                and row.get("scope").strip()
             }
         ),
     ]
@@ -179,6 +208,7 @@ def _render_rules(
                 "Dominio": (
                     row["dominio_codigo"]
                 ),
+                "Origen": (row.get("origin_label") or "—"),
                 "Aplicabilidad": (
                     business_applicability(
                         row[
@@ -187,9 +217,9 @@ def _render_rules(
                     )
                 ),
                 "Nivel de aplicación": (
-                    business_scope(
-                        row["scope"]
-                    )
+                    business_scope(row["scope"])
+                    if row.get("configured")
+                    else "—"
                 ),
                 "Aplica en": (
                     row["scope_label"]
@@ -220,11 +250,13 @@ def _render_rules(
                     )
                 ),
                 "Herencia permitida": (
-                    "Sí"
-                    if row[
-                        "inheritance_label"
-                    ] == "Hereda"
-                    else "No"
+                    "Por definir"
+                    if not row.get("configured")
+                    else (
+                        "Sí"
+                        if row["inheritance_label"] == "Hereda"
+                        else "No"
+                    )
                 ),
                 "Tipo de configuración": (
                     row["override_label"]
@@ -303,6 +335,12 @@ def _render_rules(
         definition_id=definition_id,
         rule_id=rule_id,
     )
+
+    if st.session_state.pop(f"assignment_flow_notice_{property_id}", False):
+        st.success(
+            "Asignación iniciada. Revisa y confirma la configuración del inmueble; "
+            "todavía no se ha creado ninguna versión."
+        )
 
     if not detail:
         st.warning(
@@ -873,10 +911,11 @@ def render_governance_section(
         "excepciones del inmueble activo."
     )
 
-    rule_tab, fee_tab, exception_tab = (
+    rule_tab, visual_builder_tab, fee_tab, exception_tab = (
         st.tabs(
             [
                 "Reglas",
+                "Rule Visual Builder",
                 "Cuotas",
                 "Excepciones",
             ]
@@ -893,6 +932,18 @@ def render_governance_section(
             st.warning(
                 "Sin permiso para consultar "
                 f"el Gobierno Financiero: {exc}"
+            )
+
+    with visual_builder_tab:
+        try:
+            render_rule_visual_builder(
+                property_id=property_id,
+                user=user,
+            )
+        except PermissionError as exc:
+            st.warning(
+                "Sin permiso para consultar "
+                f"Rule Visual Builder: {exc}"
             )
 
     with fee_tab:
@@ -919,3 +970,210 @@ def render_governance_section(
                 "Sin permiso para consultar "
                 f"las excepciones: {exc}"
             )
+
+def _render_dynamic_rule_catalog(*, property_id, user):
+    st.markdown("#### Catálogo y asignación de reglas")
+    st.caption(
+        "Consulta las reglas disponibles en Condo_Smart, su compatibilidad y "
+        "la forma en que se aplican al inmueble activo."
+    )
+
+    catalog = list_global_financial_rule_catalog(
+        property_id=property_id,
+        user=user,
+    )
+
+    if catalog:
+        catalog_display = pd.DataFrame([
+            {
+                "Regla": row["definition_name"],
+                "Código": row["definition_code"],
+                "Origen": row["origin_label"],
+                "Disponible para": business_applicability(row["applicability_label"]),
+                "Asignación al inmueble": row["assignment_label"],
+                "Estado": "Activa" if row["activo"] else "Inactiva",
+            }
+            for row in catalog
+        ])
+        catalog_event = st.dataframe(
+            catalog_display,
+            hide_index=True,
+            use_container_width=True,
+            selection_mode="single-row",
+            on_select="rerun",
+            key=f"global_rule_catalog_grid_{property_id}",
+        )
+        selected_rows = (
+            catalog_event.selection.rows
+            if catalog_event and catalog_event.selection
+            else []
+        )
+        if selected_rows:
+            selected = catalog[selected_rows[0]]
+            st.session_state[f"selected_global_catalog_rule_{property_id}"] = selected["definition_id"]
+    else:
+        st.info("El catálogo global todavía no contiene definiciones activas.")
+
+    action_left, action_right = st.columns(2)
+    with action_left:
+        new_global = st.button(
+            "+ Nueva regla global",
+            type="primary",
+            key=f"new_global_definition_{property_id}",
+        )
+    with action_right:
+        new_property = st.button(
+            "+ Nueva regla propia del inmueble",
+            key=f"new_property_definition_{property_id}",
+        )
+
+    action_key=f"new_rule_business_action_{property_id}"
+    if new_global:
+        st.session_state[action_key]="GLOBAL"
+    if new_property:
+        st.session_state[action_key]="INMUEBLE"
+
+    selected_definition_id=st.session_state.get(f"selected_global_catalog_rule_{property_id}")
+    selected=next((row for row in catalog if row["definition_id"]==selected_definition_id),None)
+    if selected:
+        st.markdown("##### Acciones de la regla seleccionada")
+        st.write(f"**{selected['definition_name']}** · {selected['assignment_label']}")
+        if selected["can_adopt"]:
+            st.info("Esta regla está disponible para el inmueble y todavía no está asignada.")
+            if st.button("Asignar a este inmueble", type="primary", key=f"assign_catalog_rule_{property_id}_{selected['definition_id']}"):
+                st.session_state[f"selected_financial_rule_{property_id}"] = (selected["definition_id"], None)
+                st.session_state[f"governance_rule_action_{property_id}"] = "CREATE_RULE"
+                st.session_state[f"assignment_flow_notice_{property_id}"] = True
+                st.session_state[f"assignment_from_catalog_{property_id}"] = True
+                st.session_state[f"rule_new_scope_{property_id}"] = "INMUEBLE"
+                st.rerun()
+        elif selected["can_override"]:
+            st.info("La regla ya tiene una configuración heredada o existente y admite una especialización para este inmueble.")
+            if st.button("Configurar para este inmueble", key=f"override_catalog_rule_{property_id}_{selected['definition_id']}"):
+                st.session_state[f"selected_financial_rule_{property_id}"] = (selected["definition_id"], selected.get("rule_id"))
+                st.info("Continúa en Configuración del inmueble para revisar la ficha y las acciones gobernadas disponibles.")
+        elif not selected["compatible"]:
+            st.warning("Esta regla no es compatible con la tipología del inmueble activo.")
+            st.caption("La aplicabilidad sólo puede modificarse desde el gobierno global del catálogo y con los permisos correspondientes.")
+        else:
+            st.info("Consulta Configuración del inmueble para revisar versiones, vigencia, auditoría y acciones disponibles.")
+
+    mode=st.session_state.get(action_key)
+    if not mode:
+        return
+
+    title=("Nueva regla global" if mode=="GLOBAL" else "Nueva regla propia del inmueble")
+    with st.expander(title, expanded=True):
+        st.caption(
+            "Define la regla en lenguaje de negocio. Los detalles técnicos se mantienen internos."
+        )
+        name_key=f"business_rule_name_{mode}_{property_id}"
+        code_key=f"business_rule_code_{mode}_{property_id}"
+        last_name_key=f"business_rule_last_name_{mode}_{property_id}"
+
+        name=st.text_input(
+            "Nombre de la regla",
+            key=name_key,
+        )
+        previous_name=st.session_state.get(last_name_key, "")
+        code_generated=False
+        if name.strip() and name != previous_name:
+            st.session_state[code_key]=suggest_financial_rule_code(name=name)
+            st.session_state[last_name_key]=name
+            code_generated=True
+
+        if code_generated:
+            st.success(
+                f"Código de la regla generado: {st.session_state.get(code_key, '')}. "
+                "Puedes editarlo antes de guardar."
+            )
+        elif name.strip() and st.session_state.get(code_key):
+            st.caption("Código sugerido por Condo_Smart. Puedes editarlo antes de guardar.")
+
+        with st.form(
+            f"business_rule_definition_{mode}_{property_id}",
+            enter_to_submit=False,
+        ):
+            code=st.text_input(
+                "Código de la regla",
+                key=code_key,
+                help=(
+                    "Condo_Smart propone esta clave a partir del nombre. "
+                    "Puedes editarla antes de guardar; el sistema validará su formato y unicidad."
+                ),
+            )
+            description=st.text_area("Descripción y propósito")
+            availability=st.selectbox(
+                "¿En qué inmuebles podrá utilizarse esta regla?",
+                ["Todos los inmuebles", "Sólo en ciertos tipos de inmueble"],
+                disabled=(mode=="INMUEBLE"),
+                help=(
+                    "La disponibilidad determina dónde puede utilizarse la regla. "
+                    "No la asigna automáticamente a los inmuebles."
+                ),
+            )
+            property_types=[]
+            if mode=="GLOBAL" and availability=="Sólo en ciertos tipos de inmueble":
+                property_type_options={
+                    "Fraccionamiento": "FRACCIONAMIENTO",
+                    "Plaza comercial": "PLAZA_COMERCIAL",
+                    "Condominio vertical": "VERTICAL",
+                }
+                selected_type_labels=st.multiselect(
+                    "Selecciona los tipos de inmueble",
+                    list(property_type_options),
+                    help="Puedes seleccionar uno o varios tipos de inmueble.",
+                )
+                property_types=[property_type_options[label] for label in selected_type_labels]
+                st.caption(
+                    "La disponibilidad sólo habilita el uso de la regla en esos tipos de inmueble; "
+                    "la asignación se realiza posteriormente desde la configuración de cada inmueble."
+                )
+            save=st.form_submit_button(
+                "Guardar definición",
+                type="primary",
+                help="Guardar es la única acción que registra la definición.",
+            )
+            cancel=st.form_submit_button("Cancelar")
+        if cancel:
+            st.session_state.pop(action_key,None)
+            st.session_state.pop(name_key,None)
+            st.session_state.pop(code_key,None)
+            st.session_state.pop(last_name_key,None)
+            st.rerun()
+        if save:
+            try:
+                definition=create_financial_rule_definition(
+                    property_id=property_id,
+                    code=code,
+                    name=name,
+                    description=description,
+                    domain_code="FINANZAS",
+                    result_type="JSON",
+                    actor_id=user["id"],
+                    parameter_schema={},
+                    allows_inheritance=True,
+                    allows_override=True,
+                    allows_property=True,
+                    allows_structure=True,
+                    allows_space=False,
+                )
+                if mode=="GLOBAL" and availability=="Sólo en ciertos tipos de inmueble" and not property_types:
+                    raise ValueError("SELECCIONA_AL_MENOS_UN_TIPO_DE_INMUEBLE")
+                for property_type in property_types:
+                    set_financial_rule_applicability(
+                        property_id=property_id,
+                        definition_id=definition["id"],
+                        dimension_code="TIPO_INMUEBLE",
+                        value_code=property_type,
+                        included=True,
+                        actor_id=user["id"],
+                    )
+                st.session_state.pop(action_key,None)
+                st.session_state.pop(name_key,None)
+                st.session_state.pop(code_key,None)
+                st.session_state.pop(last_name_key,None)
+                st.success("Definición guardada. Ya puede configurarse mediante su ciclo de vida gobernado.")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"No fue posible guardar la definición: {exc}")

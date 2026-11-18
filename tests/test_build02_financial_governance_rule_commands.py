@@ -17,6 +17,7 @@ def test_rule_creation_uses_governance_permission():
 
 def test_rule_creation_supports_scopes():
     for token in [
+        '"GLOBAL"',
         '"INMUEBLE"',
         '"ESTRUCTURA"',
         '"ESPACIO"',
@@ -132,3 +133,9 @@ def test_rule_commands_do_not_modify_movements():
 def test_rule_commands_have_no_ui_dependency():
     assert "import streamlit" not in SERVICE
     assert "st." not in SERVICE
+
+
+def test_global_rule_creation_is_explicit_and_governed():
+    assert 'INVALID_GLOBAL_RULE_SCOPE' in SERVICE
+    assert 'GLOBAL_FINANCIAL_RULE_REQUIRES_GLOBAL_ADMIN' in SERVICE
+    assert '(None if scope_level == "GLOBAL" else property_id)' in SERVICE

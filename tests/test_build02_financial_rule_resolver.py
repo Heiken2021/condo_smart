@@ -61,6 +61,7 @@ def test_resolver_checks_definition_applicability():
 
 def test_resolver_has_explicit_precedence():
     for token in [
+        '"GLOBAL": 50',
         '"CORE": 100',
         '"TIPOLOGIA": 200',
         '"INMUEBLE": 300',
@@ -176,3 +177,8 @@ def test_service_does_not_write_governance_data():
 def test_service_has_no_ui_dependency():
     assert "import streamlit" not in SERVICE
     assert "st." not in SERVICE
+
+
+def test_resolver_global_scope_precedes_property_hierarchy():
+    assert 'if level == "GLOBAL":' in SERVICE
+    assert '"GLOBAL > CORE > TIPOLOGIA > INMUEBLE > "' in SERVICE

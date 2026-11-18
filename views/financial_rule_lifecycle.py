@@ -240,6 +240,7 @@ def _render_scope_fields(
     scope = st.selectbox(
         "Alcance",
         [
+            "GLOBAL",
             "INMUEBLE",
             "ESTRUCTURA",
             "ESPACIO",
@@ -309,6 +310,18 @@ def _render_create_rule(
 ):
     st.markdown("### Nueva regla")
 
+    assignment_from_catalog = bool(
+        st.session_state.get(
+            f"assignment_from_catalog_{property_id}"
+        )
+    )
+
+    if assignment_from_catalog:
+        st.success(
+            "Esta configuración se asignará al inmueble activo. "
+            "La definición seguirá disponible en el catálogo para otros inmuebles."
+        )
+
     st.info(
         "Esta operación creará la configuración "
         "de la regla. Después se deberá crear "
@@ -346,34 +359,50 @@ def _render_create_rule(
             ),
         )
 
-        scope, structure_id, space_id = (
-            _render_scope_fields(
-                property_id=property_id,
-                detail=detail,
+        if assignment_from_catalog:
+            scope, structure_id, space_id = (
+                "INMUEBLE",
+                None,
+                None,
             )
-        )
+            applicable_type = ""
+            inherits = False
+            is_override = False
 
-        applicable_type = st.text_input(
-            "Tipo aplicable",
-            value=(
-                detail.get(
-                    "property_type"
+            st.markdown("**Se asignará a:** Inmueble activo")
+            st.caption(
+                "La disponibilidad por tipo de inmueble pertenece al catálogo. "
+                "Esta operación sólo crea la configuración del inmueble activo."
+            )
+        else:
+            scope, structure_id, space_id = (
+                _render_scope_fields(
+                    property_id=property_id,
+                    detail=detail,
                 )
-                or ""
-            ),
-        )
+            )
 
-        inherits = st.toggle(
-            "Hereda configuración",
-            value=True,
-            help=HELP["inheritance"],
-        )
+            applicable_type = st.text_input(
+                "Tipo aplicable",
+                value=(
+                    detail.get(
+                        "property_type"
+                    )
+                    or ""
+                ),
+            )
 
-        is_override = st.toggle(
-            "Es override",
-            value=False,
-            help=HELP["override"],
-        )
+            inherits = st.toggle(
+                "Hereda configuración",
+                value=True,
+                help=HELP["inheritance"],
+            )
+
+            is_override = st.toggle(
+                "Es override",
+                value=False,
+                help=HELP["override"],
+            )
 
         priority_level = st.selectbox(
             "Prioridad de aplicación",
@@ -419,6 +448,7 @@ def _render_create_rule(
 
     if cancel:
         _clear_action(property_id)
+        st.session_state.pop(f"assignment_from_catalog_{property_id}", None)
         st.rerun()
 
     if not submitted:
@@ -430,21 +460,30 @@ def _render_create_rule(
             definition_id=detail[
                 "definition_id"
             ],
-            scope_level=scope,
+            scope_level=(
+                "INMUEBLE"
+                if assignment_from_catalog
+                else scope
+            ),
             code=code.strip(),
             name=name.strip(),
             actor_id=user["id"],
             structure_id=structure_id,
             space_id=space_id,
             applicable_type=(
-                applicable_type.strip()
-                or None
+                None
+                if assignment_from_catalog
+                else (applicable_type.strip() or None)
             ),
             description=(
                 description.strip()
                 or None
             ),
-            inherits=inherits,
+            inherits=(
+                False
+                if assignment_from_catalog
+                else inherits
+            ),
             is_override=is_override,
             priority=priority,
         )
@@ -457,6 +496,7 @@ def _render_create_rule(
         return
 
     _clear_action(property_id)
+    st.session_state.pop(f"assignment_from_catalog_{property_id}", None)
 
     st.success(
         "Regla creada correctamente. "

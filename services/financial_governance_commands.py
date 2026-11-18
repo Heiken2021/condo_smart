@@ -836,6 +836,7 @@ def create_financial_rule(
     ).upper()
 
     if scope_level not in {
+        "GLOBAL",
         "INMUEBLE",
         "ESTRUCTURA",
         "ESPACIO",
@@ -862,6 +863,15 @@ def create_financial_rule(
         raise ValueError(
             "INVALID_FINANCIAL_RULE_PRIORITY"
         )
+
+    if (
+        scope_level == "GLOBAL"
+        and (structure_id is not None or space_id is not None)
+    ):
+        raise ValueError("INVALID_GLOBAL_RULE_SCOPE")
+
+    if scope_level == "GLOBAL" and actor.get("rol_global") not in {"ROOT", "SUPERADMIN"}:
+        raise PermissionError("GLOBAL_FINANCIAL_RULE_REQUIRES_GLOBAL_ADMIN")
 
     if (
         scope_level == "INMUEBLE"
@@ -979,7 +989,7 @@ def create_financial_rule(
                         definition_id,
                         policy_id,
                         scope_level,
-                        property_id,
+                        (None if scope_level == "GLOBAL" else property_id),
                         structure_id,
                         space_id,
                         applicable_type,
@@ -2594,3 +2604,86 @@ def resolve_financial_exception(
     exception["trace_id"] = trace_id
 
     return exception
+
+def create_financial_rule_definition(
+    *, property_id, code, name, domain_code, result_type,
+    actor_id, description=None, parameter_schema=None,
+    mandatory=False, allows_specialization=True,
+    allows_inheritance=True, allows_override=True,
+    allows_exception=True, requires_approval=True,
+    allows_property=True, allows_structure=True,
+    allows_space=False, kpi_context=True, ai_context=True,
+):
+    actor = _require_actor(actor_id, "FINANZAS_REGLA_GESTIONAR", property_id)
+    if actor.get("rol_global") not in {"ROOT", "SUPERADMIN"}:
+        raise PermissionError("FINANCIAL_RULE_DEFINITION_REQUIRES_GLOBAL_ADMIN")
+    code = _required_text(code, "FINANCIAL_RULE_DEFINITION_CODE_REQUIRED", 100).upper()
+    name = _required_text(name, "FINANCIAL_RULE_DEFINITION_NAME_REQUIRED", 200)
+    domain_code = _required_text(domain_code, "FINANCIAL_RULE_DOMAIN_REQUIRED", 80).upper()
+    result_type = _required_text(result_type, "FINANCIAL_RULE_RESULT_TYPE_REQUIRED", 40).upper()
+    schema = _json(parameter_schema or {})
+    trace_id = new_trace_id()
+    with pool().connection() as connection:
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("""
+                    INSERT INTO financial_rule_definitions(
+                        codigo,nombre,descripcion,dominio_codigo,nivel_base_codigo,
+                        tipo_resultado,esquema_parametros,obligatoria,
+                        admite_especializacion,admite_herencia,admite_override,
+                        admite_excepcion,requiere_aprobacion,permite_nivel_inmueble,
+                        permite_nivel_estructura,permite_nivel_espacio,
+                        contexto_kpi,contexto_ia,activo
+                    ) VALUES(%s,%s,%s,%s,'CORE',%s,%s::jsonb,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,TRUE)
+                    RETURNING *
+                """,(code,name,_optional_text(description),domain_code,result_type,schema,
+                    bool(mandatory),bool(allows_specialization),bool(allows_inheritance),
+                    bool(allows_override),bool(allows_exception),bool(requires_approval),
+                    bool(allows_property),bool(allows_structure),bool(allows_space),
+                    bool(kpi_context),bool(ai_context)))
+                definition=dict(cursor.fetchone())
+                audit=_insert_audit(cursor,actor=actor,property_id=property_id,
+                    operation_type="FINANCIAL_RULE_DEFINITION_CREATED",
+                    entity="FINANCIAL_RULE_DEFINITION",entity_id=definition["id"],
+                    new_status="ACTIVO",detail=name,
+                    metadata={"codigo":code,"dominio_codigo":domain_code},trace_id=trace_id)
+            connection.commit()
+        except Exception:
+            connection.rollback(); raise
+    definition["audit_event_id"]=audit["id"]; definition["trace_id"]=trace_id
+    return definition
+
+
+def set_financial_rule_applicability(
+    *, property_id, definition_id, dimension_code, value_code,
+    included, actor_id,
+):
+    actor = _require_actor(actor_id, "FINANZAS_REGLA_GESTIONAR", property_id)
+    if actor.get("rol_global") not in {"ROOT", "SUPERADMIN"}:
+        raise PermissionError("FINANCIAL_RULE_APPLICABILITY_REQUIRES_GLOBAL_ADMIN")
+    dimension_code=_required_text(dimension_code,"FINANCIAL_RULE_DIMENSION_REQUIRED",40).upper()
+    value_code=_required_text(value_code,"FINANCIAL_RULE_APPLICABILITY_VALUE_REQUIRED",100).upper()
+    trace_id=new_trace_id()
+    with pool().connection() as connection:
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("""
+                    INSERT INTO financial_rule_applicability(
+                        rule_definition_id,dimension_codigo,valor_codigo,incluido
+                    ) VALUES(%s,%s,%s,%s)
+                    ON CONFLICT(rule_definition_id,dimension_codigo,valor_codigo)
+                    DO UPDATE SET incluido=EXCLUDED.incluido
+                    RETURNING *
+                """,(definition_id,dimension_code,value_code,bool(included)))
+                row=dict(cursor.fetchone())
+                audit=_insert_audit(cursor,actor=actor,property_id=property_id,
+                    operation_type="FINANCIAL_RULE_APPLICABILITY_SET",
+                    entity="FINANCIAL_RULE_DEFINITION",entity_id=definition_id,
+                    new_status="ACTIVO",detail=value_code,
+                    metadata={"dimension_codigo":dimension_code,"valor_codigo":value_code,"incluido":bool(included)},
+                    trace_id=trace_id)
+            connection.commit()
+        except Exception:
+            connection.rollback(); raise
+    row["audit_event_id"]=audit["id"]; row["trace_id"]=trace_id
+    return row

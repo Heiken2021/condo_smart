@@ -128,3 +128,19 @@ def test_lifecycle_has_no_direct_sql():
         "DELETE FROM",
     ):
         assert token not in LIFECYCLE
+
+def test_catalog_assignment_is_local_and_not_fake_inheritance():
+    assert 'assignment_from_catalog = bool(' in LIFECYCLE
+    assert '"INMUEBLE"' in LIFECYCLE
+    assert 'None\n                if assignment_from_catalog' in LIFECYCLE
+    assert 'False\n                if assignment_from_catalog' in LIFECYCLE
+    assert "La definición seguirá disponible en el catálogo para otros inmuebles" in LIFECYCLE
+
+def test_catalog_assignment_form_hides_redundant_technical_controls():
+    assert 'if assignment_from_catalog:' in LIFECYCLE
+    assert 'scope, structure_id, space_id = (\n                "INMUEBLE"' in LIFECYCLE
+    assert 'applicable_type = ""' in LIFECYCLE
+    assert 'inherits = False' in LIFECYCLE
+    assert 'is_override = False' in LIFECYCLE
+    assert '"**Se asignará a:** Inmueble activo"' in LIFECYCLE
+    assert "La disponibilidad por tipo de inmueble pertenece al catálogo" in LIFECYCLE

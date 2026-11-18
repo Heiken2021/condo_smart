@@ -5,6 +5,7 @@ from core.db import fetch_all, fetch_one
 
 
 SCOPE_RANK = {
+    "GLOBAL": 50,
     "CORE": 100,
     "TIPOLOGIA": 200,
     "INMUEBLE": 300,
@@ -369,6 +370,9 @@ def _candidate_rank(
     context,
 ):
     level = rule["scope_level"]
+
+    if level == "GLOBAL":
+        return SCOPE_RANK["GLOBAL"]
 
     if level == "CORE":
         return SCOPE_RANK["CORE"]
@@ -768,7 +772,7 @@ def resolve_effective_rule(
 
     explanation = {
         "precedence": (
-            "CORE > TIPOLOGIA > INMUEBLE > "
+            "GLOBAL > CORE > TIPOLOGIA > INMUEBLE > "
             "ESTRUCTURA > ESPACIO > EXCEPCION"
         ),
         "winner_scope": selected[

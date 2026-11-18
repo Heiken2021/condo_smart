@@ -1,5 +1,9 @@
 from pathlib import Path
 
+GRID = Path("services/financial_rules_grid.py").read_text(encoding="utf-8")
+
+from pathlib import Path
+
 
 SOURCE = Path(
     "services/financial_rules_grid.py"
@@ -97,3 +101,22 @@ def test_service_has_no_write_sql():
 
     for token in forbidden:
         assert token not in SOURCE
+
+def test_global_catalog_read_model_exposes_compatibility_and_assignment():
+    assert "def list_global_financial_rule_catalog(" in GRID
+    assert '"assignment_label"' in GRID
+    assert '"can_adopt"' in GRID
+    assert '"can_override"' in GRID
+    assert "FROM financial_rule_definitions" in GRID
+
+def test_governed_rule_code_uses_acronym_year_rn_sequence():
+    assert "def suggest_financial_rule_code(" in GRID
+    assert 'stopwords={"DE","DEL","LA","LAS","EL","LOS","Y","EN","PARA","POR","CON","A"}' in GRID
+    assert 'f"%-{code_year}-RN%"' in GRID
+    assert 'highest+1:03d' in GRID
+
+def test_unconfigured_definition_does_not_fake_core_configuration():
+    assert 'row.get("scope_level")\n            if configured\n            else None' in GRID
+    assert '"Catálogo de reglas" if row.get("rule_id") is None' in GRID
+    assert '"Por definir"\n                    if not configured' in GRID
+    assert '"Sin configurar"\n                    if not configured' in GRID

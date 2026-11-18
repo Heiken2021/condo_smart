@@ -1,3 +1,12 @@
+BUSINESS_SCOPE_LABELS = {
+    "GLOBAL": "Global",
+    "CORE": "Global base",
+    "TIPOLOGIA": "Por tipología",
+    "INMUEBLE": "Inmueble",
+    "ESTRUCTURA": "Estructura",
+    "ESPACIO": "Espacio",
+}
+
 from core.authorization import authorize
 from core.db import fetch_all, fetch_one
 
@@ -53,6 +62,12 @@ def _scope_label(row):
         row.get("scope_level")
         or "CORE"
     )
+
+    if level == "GLOBAL":
+        return "Catálogo de reglas"
+
+    if level == "TIPOLOGIA":
+        return "Plantilla por tipología"
 
     if level == "ESPACIO":
         return (
@@ -413,7 +428,8 @@ def list_financial_rule_grid(
 
         row_scope = (
             row.get("scope_level")
-            or "CORE"
+            if configured
+            else None
         )
 
         if (
@@ -462,6 +478,8 @@ def list_financial_rule_grid(
                 "scope": row_scope,
                 "scope_label": (
                     _scope_label(row)
+                    if configured
+                    else "—"
                 ),
                 "applicability": (
                     applicability_items
@@ -485,17 +503,22 @@ def list_financial_rule_grid(
                     ) is not None
                     else "Sin versión"
                 ),
+                "origin_label": (
+                    "Catálogo de reglas" if row.get("rule_id") is None
+                    else "Global heredada" if row.get("scope_level") in {"GLOBAL", "CORE", "TIPOLOGIA"}
+                    else "Propia del inmueble" if row.get("scope_level") == "INMUEBLE" and not row.get("es_override")
+                    else "Modificada localmente" if row.get("es_override")
+                    else "Configuración específica"
+                ),
                 "inheritance_label": (
-                    "Hereda"
-                    if row.get("hereda")
-                    else "No hereda"
+                    "Por definir"
+                    if not configured
+                    else ("Hereda" if row.get("hereda") else "No hereda")
                 ),
                 "override_label": (
-                    "Override"
-                    if row.get(
-                        "es_override"
-                    )
-                    else "Base"
+                    "Sin configurar"
+                    if not configured
+                    else ("Override" if row.get("es_override") else "Base")
                 ),
                 "kpi_enabled": bool(
                     row.get("contexto_kpi")
@@ -710,3 +733,98 @@ def list_financial_exception_grid(
             (property_id,),
         )
     ]
+
+
+
+def list_global_financial_rule_catalog(*, property_id, user):
+    """Business read model for catalog and property assignment."""
+    _require_read(user, property_id)
+    property_context = _property_context(property_id)
+    definitions = fetch_all("""
+        SELECT
+            definition.id AS definition_id,
+            definition.codigo AS definition_code,
+            definition.nombre AS definition_name,
+            definition.descripcion AS definition_description,
+            definition.dominio_codigo,
+            definition.esquema_parametros,
+            definition.admite_herencia,
+            definition.admite_override,
+            definition.activo
+        FROM financial_rule_definitions definition
+        WHERE definition.activo=TRUE
+        ORDER BY definition.nombre, definition.codigo
+    """)
+    applicability = _applicability_map({row["definition_id"] for row in definitions})
+    configured = fetch_all("""
+        SELECT rule_definition_id, id AS rule_id, scope_level,
+               hereda, es_override, activo
+        FROM financial_rules
+        WHERE activo=TRUE
+          AND (condominio_id=%s OR condominio_id IS NULL)
+        ORDER BY id DESC
+    """, (property_id,))
+    configured_by_definition = {}
+    for row in configured:
+        configured_by_definition.setdefault(row["rule_definition_id"], dict(row))
+
+    result=[]
+    for definition in definitions:
+        row=dict(definition)
+        items=applicability.get(row["definition_id"], [])
+        compatible=_definition_matches_property(items, property_context)
+        assignment=configured_by_definition.get(row["definition_id"])
+        if assignment and assignment.get("scope_level") in {"GLOBAL","CORE","TIPOLOGIA"}:
+            assignment_label="Heredada"
+            origin_label="Global"
+        elif assignment and assignment.get("es_override"):
+            assignment_label="Modificada para este inmueble"
+            origin_label="Inmueble"
+        elif assignment:
+            assignment_label="Propia del inmueble"
+            origin_label="Inmueble"
+        elif compatible:
+            assignment_label="Disponible para asignar"
+            origin_label="Catálogo de reglas"
+        else:
+            assignment_label="No compatible"
+            origin_label="Catálogo de reglas"
+        result.append({
+            **row,
+            "compatible": compatible,
+            "applicability_label": _applicability_label(items),
+            "origin_label": origin_label,
+            "assignment_label": assignment_label,
+            "rule_id": assignment.get("rule_id") if assignment else None,
+            "scope_level": assignment.get("scope_level") if assignment else None,
+            "can_adopt": bool(compatible and not assignment and row.get("admite_herencia")),
+            "can_override": bool(compatible and assignment and row.get("admite_override")),
+        })
+    return result
+
+
+
+def suggest_financial_rule_code(*, name, year=None):
+    import re
+    import unicodedata
+    from datetime import date
+
+    normalized = unicodedata.normalize("NFKD", str(name or ""))
+    words = re.findall(
+        r"[A-Za-z0-9]+",
+        "".join(ch for ch in normalized if not unicodedata.combining(ch)).upper(),
+    )
+    stopwords={"DE","DEL","LA","LAS","EL","LOS","Y","EN","PARA","POR","CON","A"}
+    meaningful=[word for word in words if word not in stopwords]
+    acronym="".join(word[0] for word in meaningful)[:6] or "RN"
+    code_year=int(year or date.today().year)
+    rows=fetch_all(
+        "SELECT codigo FROM financial_rule_definitions WHERE codigo LIKE %s",
+        (f"%-{code_year}-RN%",),
+    )
+    highest=0
+    for row in rows:
+        match=re.search(rf"-{code_year}-RN(\d+)$", str(row.get("codigo") or ""))
+        if match:
+            highest=max(highest,int(match.group(1)))
+    return f"{acronym}-{code_year}-RN{highest+1:03d}"
