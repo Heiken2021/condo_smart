@@ -68,7 +68,7 @@ def test_optional_parameters_are_supported():
 
 def test_allowed_values_use_selectbox():
     assert "st.selectbox(" in EDITOR
-    assert "format_func=(" in EDITOR
+    assert "format_func=lambda value:" in EDITOR
 
 
 def test_boolean_values_require_explicit_decision():

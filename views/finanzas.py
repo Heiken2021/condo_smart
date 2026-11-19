@@ -27,6 +27,9 @@ from services.finance import (
     register_payment,
 )
 from services.spaces import list_spaces
+from services.financial_rule_presenter import business_applicability
+from services.financial_rules_grid import list_global_financial_template_catalog
+from services.financial_governance_commands import set_global_financial_rule_applicability
 from views.financial_governance import render_governance_section
 from services.financial_obligations import (
     list_financial_obligations,
@@ -1164,17 +1167,102 @@ def _obligations_section(
 def render():
     property_id = cid()
 
-    if not property_id:
-        st.info(
-            "Selecciona un inmueble para "
-            "gestionar sus finanzas."
-        )
-        return
-
     user = st.session_state.get(
         "user",
         {},
     )
+
+    if not property_id:
+        title(
+            "Finanzas",
+            "Todos los inmuebles",
+        )
+        st.info(
+            "Estás en el contexto financiero global. Selecciona un inmueble "
+            "sólo cuando necesites consultar o ejecutar operaciones propias "
+            "de ese inmueble."
+        )
+        st.markdown("### Visión global")
+        st.caption(
+            "El inmueble es un contexto operativo, no un requisito para entrar "
+            "en Finanzas."
+        )
+        global_tab, property_tab = st.tabs(
+            ["Gobierno global", "Operación por inmueble"]
+        )
+        with global_tab:
+            st.markdown("#### Catálogo y disponibilidad de plantillas")
+            st.caption(
+                "Administra el catálogo global y su disponibilidad por tipología. "
+                "Esta función no asigna reglas ni genera movimientos en inmuebles."
+            )
+            try:
+                global_catalog=list_global_financial_template_catalog(user=user)
+            except PermissionError as exc:
+                st.warning(f"Sin permiso para administrar el catálogo global: {exc}")
+                global_catalog=[]
+            if global_catalog:
+                global_display=pd.DataFrame([
+                    {
+                        "Plantilla": row["definition_name"],
+                        "Código": row["definition_code"],
+                        "Dominio": row.get("dominio_codigo") or "—",
+                        "Disponible para": business_applicability(row.get("applicability_label")),
+                        "Estado": "Activa" if row.get("activo") else "Inactiva",
+                    }
+                    for row in global_catalog
+                ])
+                global_event=st.dataframe(
+                    global_display,hide_index=True,use_container_width=True,
+                    selection_mode="single-row",on_select="rerun",
+                    key="global_finance_template_catalog_grid",
+                )
+                selected_rows=(global_event.selection.rows if global_event and global_event.selection else [])
+                if selected_rows:
+                    selected=global_catalog[selected_rows[0]]
+                    st.markdown("##### Administrar disponibilidad")
+                    st.write(f"**{selected['definition_name']}** · {selected['definition_code']}")
+                    type_options={
+                        "Fraccionamiento":"FRACCIONAMIENTO",
+                        "Plaza comercial":"PLAZA_COMERCIAL",
+                        "Condominio vertical":"VERTICAL",
+                    }
+                    active_values={
+                        item["value"] for item in selected.get("applicability_items",[])
+                        if item.get("dimension") == "TIPO_INMUEBLE" and item.get("included")
+                    }
+                    defaults=[label for label,code in type_options.items() if code in active_values]
+                    with st.form(f"global_template_availability_{selected['definition_id']}"):
+                        selected_labels=st.multiselect(
+                            "Tipos de inmueble permitidos",list(type_options),default=defaults
+                        )
+                        save_global_availability=st.form_submit_button(
+                            "Guardar disponibilidad",type="primary"
+                        )
+                    if save_global_availability:
+                        selected_codes={type_options[label] for label in selected_labels}
+                        if not selected_codes:
+                            st.error("Selecciona al menos un tipo de inmueble.")
+                        else:
+                            for value_code in type_options.values():
+                                set_global_financial_rule_applicability(
+                                    definition_id=selected["definition_id"],
+                                    dimension_code="TIPO_INMUEBLE",
+                                    value_code=value_code,
+                                    included=(value_code in selected_codes),
+                                    actor_id=user["id"],
+                                )
+                            st.success("Disponibilidad global actualizada.")
+                            st.rerun()
+            else:
+                st.info("El catálogo global no contiene plantillas visibles para este usuario.")
+        with property_tab:
+            st.markdown("#### Selecciona un inmueble para continuar")
+            st.write(
+                "Cargos, pagos, gastos, obligaciones, estados de cuenta, cuotas, "
+                "excepciones y el Workflow requieren un inmueble activo."
+            )
+        return
 
     property_data = st.session_state.get(
         "condominio",

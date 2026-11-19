@@ -538,36 +538,66 @@ def render_parameter_inputs(
             )
 
             if allowed:
-                index = None
-
-                if current_value in allowed:
-                    index = allowed.index(
-                        current_value
-                    )
-
-                values[code] = (
-                    st.selectbox(
-                        label,
-                        allowed,
-                        index=index,
-                        format_func=(
-                            friendly_value
-                        ),
-                        placeholder=(
-                            "Selecciona un valor"
-                        ),
-                        key=(
-                            f"{key_prefix}_{code}"
-                        ),
-                        help=(
-                            help_text
-                            + "\n\n"
-                            + limits_text(
-                                specification
-                            )
-                        ),
+                allow_custom = bool(
+                    specification.get(
+                        "accept_new_options",
+                        False,
                     )
                 )
+                custom_marker = "__CUSTOM_VALUE__"
+                select_options = list(allowed)
+                if allow_custom:
+                    select_options.append(custom_marker)
+
+                if current_value in allowed:
+                    selected_value = current_value
+                elif allow_custom and current_value:
+                    selected_value = custom_marker
+                else:
+                    selected_value = None
+
+                index = (
+                    select_options.index(selected_value)
+                    if selected_value in select_options
+                    else None
+                )
+                selection = st.selectbox(
+                    label,
+                    select_options,
+                    index=index,
+                    format_func=lambda value: (
+                        "Otra periodicidad"
+                        if value == custom_marker
+                        else friendly_value(value)
+                    ),
+                    placeholder="Selecciona un valor",
+                    key=f"{key_prefix}_{code}",
+                    help=(
+                        help_text
+                        + "\n\n"
+                        + limits_text(specification)
+                    ),
+                )
+
+                if selection == custom_marker:
+                    custom_default = (
+                        str(current_value)
+                        if current_value
+                        and current_value not in allowed
+                        else ""
+                    )
+                    values[code] = st.text_input(
+                        "Especifica la periodicidad",
+                        value=custom_default,
+                        placeholder="Ej. Cada 4 meses",
+                        key=f"{key_prefix}_{code}_custom",
+                        help=(
+                            "Describe la periodicidad particular "
+                            "aprobada para este inmueble."
+                        ),
+                    ).strip()
+                else:
+                    values[code] = selection
 
             else:
                 values[code] = (

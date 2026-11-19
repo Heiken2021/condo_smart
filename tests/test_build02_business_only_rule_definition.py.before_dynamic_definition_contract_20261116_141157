@@ -1,0 +1,152 @@
+from pathlib import Path
+
+
+VIEW = Path(
+    "views/financial_governance.py"
+).read_text(encoding="utf-8")
+
+
+def test_rule_detail_has_business_tabs():
+    for label in (
+        "Definición",
+        "Configuración",
+        "Versiones",
+        "Gobierno y auditoría",
+    ):
+        assert f'"{label}"' in VIEW
+
+
+def test_raw_technical_json_is_not_visible():
+    assert "st.json(schema)" not in VIEW
+
+    assert (
+        "Ver definición técnica"
+        not in VIEW
+    )
+
+
+def test_internal_schema_stays_internal():
+    assert (
+        "La estructura técnica que define "
+        in VIEW
+    )
+
+    assert (
+        "administrada "
+        in VIEW
+    )
+
+    assert (
+        "internamente por Condo_Smart"
+        in VIEW
+    )
+
+    assert (
+        "operativa del inmueble."
+        in VIEW
+    )
+
+
+def test_configuration_has_empty_state():
+    assert (
+        "Esta regla todavía no tiene "
+        in VIEW
+    )
+
+    assert (
+        "una configuración creada."
+        in VIEW
+    )
+
+    assert (
+        "Selecciona **Nueva regla** "
+        in VIEW
+    )
+
+    assert (
+        "Importe, Frecuencia y Día "
+        in VIEW
+    )
+
+    assert (
+        "de vencimiento."
+        in VIEW
+    )
+
+
+def test_configuration_is_versioned():
+    assert (
+        "Los valores de configuración "
+        in VIEW
+    )
+
+    assert (
+        "pertenecen a una versión."
+        in VIEW
+    )
+
+    assert (
+        "Una versión aprobada no se "
+        in VIEW
+    )
+
+    assert (
+        "modifica destructivamente"
+        in VIEW
+    )
+
+    assert (
+        "una nueva versión."
+        in VIEW
+    )
+
+
+def test_parameter_cards_are_visible():
+    for token in (
+        "### 💰 Importe",
+        "### 🔄 Frecuencia",
+        "### 📅 Día de vencimiento",
+    ):
+        assert token in VIEW
+
+
+def test_parameter_help_is_available():
+    start = VIEW.index(
+        "#### Parámetros configurables"
+    )
+
+    end = VIEW.index(
+        "with configuration_tab:",
+        start,
+    )
+
+    block = VIEW[start:end]
+
+    assert block.count(
+        "st.popover("
+    ) >= 3
+
+    assert block.count(
+        '"ⓘ"'
+    ) >= 3
+
+
+def test_parameter_cards_have_examples():
+    for token in (
+        "Ejemplo: si la cuota mensual ",
+        "Para mantenimiento ordinario, ",
+        "Ejemplo: configurar 10 ",
+    ):
+        assert token in VIEW
+
+
+def test_ui_does_not_edit_schema():
+    forbidden = (
+        "st.json(schema)",
+        "st.data_editor(schema",
+        'st.text_area("JSON',
+        'st.text_area("Esquema',
+    )
+
+    for token in forbidden:
+        assert token not in VIEW

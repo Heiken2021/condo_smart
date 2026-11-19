@@ -1,0 +1,32 @@
+from pathlib import Path
+
+SQL=Path("database/migrations/033_flexible_frequency_catalog_build02.sql").read_text(encoding="utf-8")
+EDITOR=Path("services/financial_dynamic_parameter_editor.py").read_text(encoding="utf-8")
+
+def test_standard_frequencies_are_governed():
+    for value in ("MENSUAL","BIMESTRAL","TRIMESTRAL","SEMESTRAL","ANUAL"):
+        assert value in SQL
+
+def test_frequency_allows_additional_admin_value():
+    assert '"accept_new_options":true' in SQL
+    assert '"Otra periodicidad"' in EDITOR
+    assert '"Especifica la periodicidad"' in EDITOR
+    assert 'custom_marker = "__CUSTOM_VALUE__"' in EDITOR
+
+def test_value_remains_a_string_parameter():
+    assert '"type":"string"' in SQL
+
+def test_migration_does_not_touch_lifecycle_records():
+    for token in ("INSERT INTO financial_rules","INSERT INTO financial_rule_versions","INSERT INTO financial_obligations","space_fee_history"):
+        assert token not in SQL
+
+def test_custom_frequency_uses_explicit_business_ui():
+    assert '"Otra periodicidad"' in EDITOR
+    assert '"Especifica la periodicidad"' in EDITOR
+    assert '"Ej. Cada 4 meses"' in EDITOR
+    assert 'custom_marker = "__CUSTOM_VALUE__"' in EDITOR
+
+def test_custom_frequency_is_required_when_selected():
+    assert ').strip()' in EDITOR
+    assert 'values[code] = st.text_input(' in EDITOR
+

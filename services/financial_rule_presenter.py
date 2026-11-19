@@ -402,11 +402,13 @@ def business_priority(value):
 
 def business_applicability(value):
     labels = {
-        "TIPO_INMUEBLE:FRACCIONAMIENTO":
-            "Fraccionamiento",
+        "TIPO_INMUEBLE:FRACCIONAMIENTO": "Fraccionamiento",
+        "TIPO_INMUEBLE:PLAZA_COMERCIAL": "Plaza comercial",
+        "TIPO_INMUEBLE:VERTICAL": "Condominio vertical",
     }
 
-    return labels.get(
-        value,
-        value or "—",
-    )
+    if not value:
+        return "—"
+
+    parts = [part.strip() for part in str(value).split(" · ") if part.strip()]
+    return " · ".join(labels.get(part, part) for part in parts)

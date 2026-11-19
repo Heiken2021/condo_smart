@@ -1,0 +1,91 @@
+from pathlib import Path
+
+
+VIEW = Path(
+    "views/financial_governance.py"
+).read_text(encoding="utf-8")
+
+
+def test_parameter_experience_has_three_cards():
+    assert "### 💰 Importe" in VIEW
+    assert "### 🔄 Frecuencia" in VIEW
+    assert (
+        "### 📅 Día de vencimiento"
+        in VIEW
+    )
+
+
+def test_parameters_have_help_popovers():
+    block = VIEW[
+        VIEW.index(
+            "#### Parámetros configurables"
+        ):
+        VIEW.index(
+            "with version_tab:"
+        )
+    ]
+
+    assert block.count(
+        "st.popover("
+    ) >= 3
+
+
+def test_amount_has_business_guidance():
+    assert (
+        "El importe periódico de "
+        in VIEW
+    )
+    assert (
+        "si la cuota mensual "
+        in VIEW
+    )
+
+
+def test_frequency_has_business_guidance():
+    assert (
+        "La periodicidad con la que "
+        in VIEW
+    )
+    assert (
+        "Mensual significa que la "
+        in VIEW
+    )
+
+
+def test_due_day_has_business_guidance():
+    assert (
+        "El día límite de pago "
+        in VIEW
+    )
+    assert (
+        "vence el día 10 "
+        in VIEW
+    )
+
+
+def test_technical_json_is_superadmin_only():
+    assert (
+        'user.get("rol_global")'
+        in VIEW
+    )
+    assert '"SUPERADMIN"' in VIEW
+    assert (
+        "Administración avanzada · "
+        in VIEW
+    )
+
+
+def test_admin_does_not_edit_json():
+    assert (
+        "Vista técnica de sólo lectura"
+        in VIEW
+    )
+
+    forbidden = (
+        "st.text_area(\n"
+        '                    "JSON',
+        "st.data_editor(schema",
+    )
+
+    for token in forbidden:
+        assert token not in VIEW

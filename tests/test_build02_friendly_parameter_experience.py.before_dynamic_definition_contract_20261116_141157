@@ -1,0 +1,127 @@
+from pathlib import Path
+
+
+VIEW = Path(
+    "views/financial_governance.py"
+).read_text(encoding="utf-8")
+
+
+def test_parameter_experience_has_three_cards():
+    assert "### 💰 Importe" in VIEW
+    assert "### 🔄 Frecuencia" in VIEW
+    assert (
+        "### 📅 Día de vencimiento"
+        in VIEW
+    )
+
+
+def test_parameters_have_help_popovers():
+    start = VIEW.index(
+        "#### Parámetros configurables"
+    )
+
+    end = VIEW.index(
+        "with configuration_tab:",
+        start,
+    )
+
+    block = VIEW[start:end]
+
+    assert block.count(
+        "st.popover("
+    ) >= 3
+
+
+def test_amount_has_business_guidance():
+    assert (
+        "El importe periódico de "
+        in VIEW
+    )
+
+    assert (
+        "si la cuota mensual "
+        in VIEW
+    )
+
+    assert (
+        "Valor mínimo:"
+        in VIEW
+    )
+
+
+def test_frequency_has_business_guidance():
+    assert (
+        "La periodicidad con la que "
+        in VIEW
+    )
+
+    assert (
+        "Mensual significa que la "
+        in VIEW
+    )
+
+    assert (
+        "Opciones permitidas:"
+        in VIEW
+    )
+
+
+def test_due_day_has_business_guidance():
+    assert (
+        "El día límite de pago "
+        in VIEW
+    )
+
+    assert (
+        "vence el día 10 "
+        in VIEW
+    )
+
+    assert (
+        "Valores permitidos:"
+        in VIEW
+    )
+
+
+def test_technical_json_is_not_part_of_ui():
+    assert "st.json(schema)" not in VIEW
+
+    assert (
+        "Administración avanzada"
+        not in VIEW
+    )
+
+    assert (
+        "Ver definición técnica"
+        not in VIEW
+    )
+
+
+def test_schema_is_internal_engine_only():
+    assert (
+        'detail.get(\n'
+        '                "esquema_parametros"'
+        in VIEW
+    )
+
+    assert (
+        "administrada "
+        in VIEW
+    )
+
+    assert (
+        "internamente por Condo_Smart"
+        in VIEW
+    )
+
+
+def test_admin_does_not_edit_json():
+    forbidden = (
+        "st.json(schema)",
+        "st.data_editor(schema",
+        'st.text_area("JSON',
+        'st.text_area("Esquema',
+    )
+
+    for token in forbidden:
+        assert token not in VIEW

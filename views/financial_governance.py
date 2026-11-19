@@ -1,6 +1,7 @@
 from datetime import date
 
 import pandas as pd
+import altair as alt
 import streamlit as st
 
 from core.authorization import authorize
@@ -40,6 +41,394 @@ def _money(value):
         f"${float(value or 0):,.2f}"
     )
 
+
+def _semantic_status(value):
+    raw = str(value or "").upper()
+    label = business_status(value)
+    if raw in {"APROBADO", "APROBADA", "VIGENTE", "ACTIVO", "ACTIVA"}:
+        return f"🟢 {label}"
+    if raw in {"BORRADOR", "PENDIENTE", "SIN_CONFIGURAR", "SIN_VERSION"}:
+        return f"🟠 {label}"
+    if raw in {"BLOQUEADO", "BLOQUEADA", "VENCIDO", "VENCIDA", "RECHAZADO", "RECHAZADA"}:
+        return f"🔴 {label}"
+    return f"⚪ {label}"
+
+
+def _semantic_origin(value):
+    label = str(value or "Sin configurar")
+    upper = label.upper()
+    if "HERED" in upper:
+        return f"🟣 {label}"
+    if "GLOBAL" in upper or "CATÁLOGO" in upper:
+        return f"🔵 {label}"
+    if "PROPIA" in upper:
+        return f"🟢 {label}"
+    if "MODIFICADA" in upper or "OVERRIDE" in upper:
+        return f"🟠 {label}"
+    return f"⚪ {label}"
+
+
+def _semantic_assignment(value, compatible=True):
+    label = str(value or "Sin configurar")
+    upper = label.upper()
+    if not compatible or "NO COMPATIBLE" in upper:
+        return f"🔴 {label}"
+    if "HERED" in upper:
+        return f"🟣 {label}"
+    if "DISPONIBLE" in upper:
+        return f"🔵 {label}"
+    if "PROPIA" in upper:
+        return f"🟢 {label}"
+    if "MODIFICADA" in upper or "OVERRIDE" in upper:
+        return f"🟠 {label}"
+    return f"⚪ {label}"
+
+
+def _semantic_applicability(value, compatible=True):
+    label = business_applicability(value)
+    if not compatible:
+        return f"🔴 {label}"
+    if str(value or "").upper() == "GENERAL":
+        return f"🔵 {label}"
+    return f"🟢 {label}"
+
+
+def _semantic_priority(value):
+    label = business_priority(value)
+    upper = str(label or "").upper()
+    if "CRÍTICA" in upper or "CRITICA" in upper:
+        return f"🔴 {label}"
+    if "ALTA" in upper:
+        return f"🟠 {label}"
+    if "NORMAL" in upper:
+        return f"🔵 {label}"
+    return f"⚪ {label}"
+
+
+def _visual_semantics_legend():
+    st.caption(
+        "Semáforo operativo: 🟢 Correcto · 🟠 Requiere atención · 🔴 Incidencia. "
+        "Contexto: Global / catálogo · Heredado · Sin configurar / no aplica."
+    )
+
+
+def _context_label(value):
+    return str(value or "Sin configurar")
+
+
+def _count_by(rows, key, empty_label="Sin definir"):
+    counts = {}
+    for row in rows:
+        value = row.get(key) or empty_label
+        counts[str(value)] = counts.get(str(value), 0) + 1
+    return counts
+
+
+def _chart_theme(chart, height=250):
+    return (
+        chart.properties(height=height)
+        .configure_view(stroke=None)
+        .configure_axis(
+            gridColor="#E8EEF5",
+            domain=False,
+            tickColor="#CBD5E1",
+            labelColor="#475569",
+            titleColor="#334155",
+        )
+        .configure_legend(
+            labelColor="#475569",
+            titleColor="#334155",
+            orient="bottom",
+        )
+    )
+
+
+def _donut_chart(labels, values, colors, title):
+    frame = pd.DataFrame({"Categoría": labels, "Reglas": values})
+    chart = (
+        alt.Chart(frame)
+        .mark_arc(innerRadius=62, outerRadius=98, cornerRadius=5)
+        .encode(
+            theta=alt.Theta("Reglas:Q", stack=True),
+            color=alt.Color(
+                "Categoría:N",
+                scale=alt.Scale(domain=labels, range=colors),
+                legend=alt.Legend(title=None),
+            ),
+            tooltip=["Categoría:N", "Reglas:Q"],
+        )
+        .properties(title=title)
+    )
+    st.altair_chart(_chart_theme(chart, height=260), use_container_width=True)
+
+
+def _horizontal_bar(counts, title, color="#2563EB"):
+    if not counts:
+        return
+    frame = pd.DataFrame(
+        [{"Categoría": key, "Reglas": value} for key, value in counts.items()]
+    ).sort_values("Reglas", ascending=False)
+    chart = (
+        alt.Chart(frame)
+        .mark_bar(cornerRadiusEnd=6, size=20, color=color)
+        .encode(
+            x=alt.X("Reglas:Q", title="Reglas", axis=alt.Axis(tickMinStep=1)),
+            y=alt.Y("Categoría:N", sort="-x", title=None),
+            tooltip=["Categoría:N", "Reglas:Q"],
+        )
+        .properties(title=title)
+    )
+    labels = chart.mark_text(align="left", baseline="middle", dx=5, color="#334155").encode(
+        text=alt.Text("Reglas:Q", format="d")
+    )
+    st.altair_chart(_chart_theme(chart + labels, height=max(220, 30 * len(frame))), use_container_width=True)
+
+
+def _status_stack(rows):
+    if not rows:
+        return
+    data = []
+    for row in rows:
+        status = str(row.get("status") or "SIN_CONFIGURAR").upper()
+        if status in {"APROBADO", "APROBADA", "VIGENTE", "ACTIVO", "ACTIVA"}:
+            health = "Correcto"
+        elif status in {"BLOQUEADO", "BLOQUEADA", "VENCIDO", "VENCIDA", "RECHAZADO", "RECHAZADA"}:
+            health = "Incidencia"
+        else:
+            health = "Atención"
+        data.append({"Dominio": row.get("dominio_codigo") or "Sin definir", "Salud": health})
+    frame = pd.DataFrame(data).groupby(["Dominio", "Salud"]).size().reset_index(name="Reglas")
+    chart = (
+        alt.Chart(frame)
+        .mark_bar(cornerRadius=3)
+        .encode(
+            y=alt.Y("Dominio:N", title=None),
+            x=alt.X("Reglas:Q", stack="normalize", title="Composición", axis=alt.Axis(format="%")),
+            color=alt.Color(
+                "Salud:N",
+                scale=alt.Scale(
+                    domain=["Correcto", "Atención", "Incidencia"],
+                    range=["#22C55E", "#F59E0B", "#EF4444"],
+                ),
+                legend=alt.Legend(title=None),
+            ),
+            tooltip=["Dominio:N", "Salud:N", "Reglas:Q"],
+        )
+        .properties(title="Mapa de salud por dominio")
+    )
+    st.altair_chart(_chart_theme(chart, height=max(250, 32 * frame["Dominio"].nunique())), use_container_width=True)
+
+
+def _priority_chart(rows):
+    counts = {}
+    for row in rows:
+        label = business_priority(row.get("prioridad")) if row.get("prioridad") else "Sin definir"
+        counts[label] = counts.get(label, 0) + 1
+    if not counts:
+        return
+    order = ["Crítica", "Alta", "Normal", "Baja", "Sin definir"]
+    colors = ["#DC2626", "#F59E0B", "#2563EB", "#60A5FA", "#CBD5E1"]
+    frame = pd.DataFrame([{"Prioridad": k, "Reglas": v} for k, v in counts.items()])
+    chart = (
+        alt.Chart(frame)
+        .mark_bar(cornerRadiusEnd=6, size=24)
+        .encode(
+            x=alt.X("Reglas:Q", title="Reglas", axis=alt.Axis(tickMinStep=1)),
+            y=alt.Y("Prioridad:N", sort=order, title=None),
+            color=alt.Color("Prioridad:N", scale=alt.Scale(domain=order, range=colors), legend=None),
+            tooltip=["Prioridad:N", "Reglas:Q"],
+        )
+        .properties(title="Prioridad de las reglas")
+    )
+    st.altair_chart(_chart_theme(chart, height=250), use_container_width=True)
+
+
+def _timeline_chart(rows):
+    timeline=[]
+    for row in rows:
+        start=row.get("vigente_desde")
+        if not start:
+            continue
+        end=row.get("vigente_hasta")
+        status=str(row.get("status") or "SIN_CONFIGURAR").upper()
+        if status in {"APROBADO","APROBADA","VIGENTE","ACTIVO","ACTIVA"}:
+            health="Correcto"
+        elif status in {"BLOQUEADO","BLOQUEADA","VENCIDO","VENCIDA","RECHAZADO","RECHAZADA"}:
+            health="Incidencia"
+        else:
+            health="Atención"
+        timeline.append({
+            "Regla": row.get("display_name") or row.get("display_code") or "Regla",
+            "Desde": start,
+            "Hasta": end,
+            "HastaVisual": end or date.today(),
+            "Vigencia": "Abierta" if end is None else "Definida",
+            "Estado": business_status(row.get("status")),
+            "Prioridad": business_priority(row.get("prioridad")) if row.get("prioridad") else "Sin definir",
+            "Versión": row.get("version_label") or "Sin versión",
+            "Salud": health,
+        })
+    st.markdown("##### Timeline de vigencias")
+    if not timeline:
+        st.info("No hay reglas con fecha Desde para representar en la línea temporal con los filtros actuales.")
+        return
+    frame=pd.DataFrame(timeline)
+    chart=(
+        alt.Chart(frame)
+        .mark_bar(cornerRadius=5, size=17)
+        .encode(
+            x=alt.X("Desde:T", title="Vigencia", axis=alt.Axis(format="%d/%m/%Y")),
+            x2="HastaVisual:T",
+            y=alt.Y("Regla:N", sort=alt.SortField(field="Desde", order="descending"), title=None),
+            color=alt.Color(
+                "Salud:N",
+                scale=alt.Scale(domain=["Correcto","Atención","Incidencia"], range=["#22C55E","#F59E0B","#EF4444"]),
+                legend=alt.Legend(title="Estado operativo"),
+            ),
+            opacity=alt.condition(alt.datum.Vigencia == "Abierta", alt.value(0.72), alt.value(1.0)),
+            tooltip=[
+                alt.Tooltip("Regla:N"), alt.Tooltip("Estado:N"), alt.Tooltip("Prioridad:N"),
+                alt.Tooltip("Versión:N"), alt.Tooltip("Desde:T", format="%d/%m/%Y"),
+                alt.Tooltip("Hasta:T", format="%d/%m/%Y"), alt.Tooltip("Vigencia:N"),
+            ],
+        )
+        .properties(title="Desde → Hasta · Las vigencias abiertas se extienden visualmente hasta hoy")
+    )
+    st.altair_chart(_chart_theme(chart, height=max(260, 30*len(frame))), use_container_width=True)
+    st.caption("Las reglas sin fecha Hasta conservan su vigencia abierta; la fecha actual se usa sólo como extremo visual del timeline.")
+
+
+def _render_governance_dashboard(*, property_id, user, property_rows):
+    st.divider()
+    st.markdown("#### Dashboard ejecutivo de Gobierno Financiero")
+    st.caption(
+        "Vista ejecutiva de sólo lectura. Resume catálogo, compatibilidad, configuración, "
+        "versionado y atención requerida con el mismo modelo filtrado de los grids."
+    )
+
+    catalog = list_global_financial_rule_catalog(property_id=property_id, user=user)
+    global_tab, property_tab = st.tabs(["Gobierno global", "Inmueble activo"])
+
+    with global_tab:
+        total = len(catalog)
+        active = sum(1 for row in catalog if row.get("activo"))
+        compatible = sum(1 for row in catalog if row.get("compatible"))
+        incompatible = total - compatible
+        health = round((compatible / total) * 100) if total else 0
+        configured = sum(1 for row in catalog if not row.get("can_adopt") and row.get("compatible"))
+
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Reglas", total)
+        c2.metric("Activas", active)
+        c3.metric("Compatibles", compatible)
+        c4.metric("No compatibles", incompatible)
+        c5.metric("Cobertura compatible", f"{health}%")
+
+        left, right = st.columns([0.9, 1.6])
+        with left:
+            _donut_chart(
+                ["Compatibles", "No compatibles"],
+                [compatible, incompatible],
+                ["#22C55E", "#EF4444"],
+                "Compatibilidad del catálogo",
+            )
+        with right:
+            _horizontal_bar(_count_by(catalog, "dominio_codigo"), "Reglas por dominio")
+
+        lower_left, lower_right = st.columns(2)
+        with lower_left:
+            _horizontal_bar(
+                _count_by(catalog, "assignment_label"),
+                "Relación con el inmueble activo",
+                color="#4F46E5",
+            )
+        with lower_right:
+            assignment_total = len(catalog)
+            available = sum(1 for row in catalog if row.get("can_adopt"))
+            related = max(0, assignment_total - available - incompatible)
+            _donut_chart(
+                ["Relacionadas", "Disponibles", "No compatibles"],
+                [related, available, incompatible],
+                ["#2563EB", "#F59E0B", "#EF4444"],
+                "Cobertura sobre el inmueble",
+            )
+
+        if incompatible:
+            st.warning(f"Atención global: {incompatible} regla(s) del catálogo no son compatibles con el inmueble activo.")
+        elif total:
+            st.success("El catálogo visible no presenta incompatibilidades con el inmueble activo.")
+
+    with property_tab:
+        total = len(property_rows)
+        configured = sum(1 for row in property_rows if row.get("configured"))
+        unconfigured = total - configured
+        with_version = sum(1 for row in property_rows if row.get("current_version_id"))
+        pending = sum(
+            1 for row in property_rows
+            if str(row.get("status") or "").upper()
+            in {"BORRADOR", "PENDIENTE", "SIN_CONFIGURAR", "SIN_VERSION"}
+        )
+        incidents = sum(
+            1 for row in property_rows
+            if str(row.get("status") or "").upper()
+            in {"BLOQUEADO", "BLOQUEADA", "VENCIDO", "VENCIDA", "RECHAZADO", "RECHAZADA"}
+        )
+        coverage = round((configured / total) * 100) if total else 0
+
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Reglas visibles", total)
+        c2.metric("Configuradas", configured)
+        c3.metric("Con versión", with_version)
+        c4.metric("Requieren atención", pending + incidents)
+        c5.metric("Cobertura configurada", f"{coverage}%")
+
+        left, right = st.columns([0.9, 1.6])
+        with left:
+            _donut_chart(
+                ["Configuradas", "Sin configurar"],
+                [configured, unconfigured],
+                ["#22C55E", "#CBD5E1"],
+                "Cobertura de configuración",
+            )
+        with right:
+            _status_stack(property_rows)
+
+        lower_left, lower_right = st.columns(2)
+        with lower_left:
+            _horizontal_bar(_count_by(property_rows, "status"), "Estado del gobierno", color="#0F766E")
+        with lower_right:
+            _priority_chart(property_rows)
+
+        _timeline_chart(property_rows)
+
+        with st.expander("Origen de la configuración", expanded=False):
+            _horizontal_bar(_count_by(property_rows, "origin_label"), "Origen de la configuración", color="#7C3AED")
+
+        attention = [
+            row for row in property_rows
+            if not row.get("configured")
+            or not row.get("current_version_id")
+            or str(row.get("status") or "").upper()
+               in {"BORRADOR", "PENDIENTE", "BLOQUEADO", "BLOQUEADA", "VENCIDO", "VENCIDA", "RECHAZADO", "RECHAZADA"}
+        ]
+        st.markdown("##### Atención prioritaria")
+        if attention:
+            st.dataframe(
+                pd.DataFrame([
+                    {
+                        "Semáforo": _semantic_status(row.get("status")),
+                        "Regla": row.get("display_name"),
+                        "Estado": business_status(row.get("status")),
+                        "Origen": _context_label(row.get("origin_label")),
+                        "Versión": row.get("version_label") or "Sin versión",
+                    }
+                    for row in attention
+                ]),
+                hide_index=True,
+                use_container_width=True,
+            )
+        else:
+            st.success("No hay reglas que requieran atención con los filtros actuales.")
 
 def _date(value):
     if value is None:
@@ -208,14 +597,8 @@ def _render_rules(
                 "Dominio": (
                     row["dominio_codigo"]
                 ),
-                "Origen": (row.get("origin_label") or "—"),
-                "Aplicabilidad": (
-                    business_applicability(
-                        row[
-                            "applicability_label"
-                        ]
-                    )
-                ),
+                "Origen": _context_label(row.get("origin_label")),
+                "Aplicabilidad": business_applicability(row["applicability_label"]),
                 "Nivel de aplicación": (
                     business_scope(row["scope"])
                     if row.get("configured")
@@ -244,11 +627,7 @@ def _render_rules(
                     is not None
                     else "Sin fecha de término"
                 ),
-                "Estado": (
-                    business_status(
-                        row["status"]
-                    )
-                ),
+                "Estado": _semantic_status(row["status"]),
                 "Herencia permitida": (
                     "Por definir"
                     if not row.get("configured")
@@ -258,20 +637,14 @@ def _render_rules(
                         else "No"
                     )
                 ),
-                "Tipo de configuración": (
-                    row["override_label"]
-                    or "—"
-                ),
-                "Prioridad": (
-                    business_priority(
-                        row.get("prioridad")
-                    )
-                ),
+                "Tipo de configuración": _context_label(row.get("override_label")),
+                "Prioridad": business_priority(row.get("prioridad")) if row.get("prioridad") else "—",
             }
             for row in filtered
         ]
     )
 
+    _visual_semantics_legend()
     event = st.dataframe(
         display,
         hide_index=True,
@@ -290,6 +663,12 @@ def _render_rules(
                 "Hasta",
             ),
         },
+    )
+
+    _render_governance_dashboard(
+        property_id=property_id,
+        user=user,
+        property_rows=filtered,
     )
 
     selected_rows = (
@@ -988,13 +1367,15 @@ def _render_dynamic_rule_catalog(*, property_id, user):
             {
                 "Regla": row["definition_name"],
                 "Código": row["definition_code"],
-                "Origen": row["origin_label"],
+                "Origen": _context_label(row["origin_label"]),
                 "Disponible para": business_applicability(row["applicability_label"]),
-                "Asignación al inmueble": row["assignment_label"],
+                "Asignación al inmueble": _context_label(row["assignment_label"]),
+                "Semáforo": ("🔴 No compatible" if not row["compatible"] else ("🟢 Operativa" if row["activo"] else "🟠 Inactiva")),
                 "Estado": "Activa" if row["activo"] else "Inactiva",
             }
             for row in catalog
         ])
+        _visual_semantics_legend()
         catalog_event = st.dataframe(
             catalog_display,
             hide_index=True,
@@ -1038,6 +1419,56 @@ def _render_dynamic_rule_catalog(*, property_id, user):
     if selected:
         st.markdown("##### Acciones de la regla seleccionada")
         st.write(f"**{selected['definition_name']}** · {selected['assignment_label']}")
+
+        is_global_admin = user.get("rol_global") in {"ROOT", "SUPERADMIN"}
+        if is_global_admin:
+            with st.expander("Administrar disponibilidad", expanded=False):
+                st.caption(
+                    "Define en qué tipos de inmueble puede utilizarse esta plantilla global. "
+                    "Esto no asigna ni crea una regla en ningún inmueble."
+                )
+                property_type_options={
+                    "Fraccionamiento": "FRACCIONAMIENTO",
+                    "Plaza comercial": "PLAZA_COMERCIAL",
+                    "Condominio vertical": "VERTICAL",
+                }
+                applicability_text=str(selected.get("applicability_label") or "")
+                current_labels=[
+                    label for label, code in property_type_options.items()
+                    if f"TIPO_INMUEBLE:{code}" in applicability_text
+                ]
+                with st.form(
+                    f"template_availability_{property_id}_{selected['definition_id']}",
+                    enter_to_submit=False,
+                ):
+                    selected_labels=st.multiselect(
+                        "Tipos de inmueble permitidos",
+                        list(property_type_options),
+                        default=current_labels,
+                        help=(
+                            "Selecciona uno o varios tipos. Los cambios controlan la "
+                            "disponibilidad de la plantilla en el catálogo y el Workflow."
+                        ),
+                    )
+                    save_availability=st.form_submit_button(
+                        "Guardar disponibilidad", type="primary"
+                    )
+                if save_availability:
+                    selected_codes={property_type_options[label] for label in selected_labels}
+                    if not selected_codes:
+                        st.error("Selecciona al menos un tipo de inmueble.")
+                    else:
+                        for property_type_code in property_type_options.values():
+                            set_financial_rule_applicability(
+                                property_id=property_id,
+                                definition_id=selected["definition_id"],
+                                dimension_code="TIPO_INMUEBLE",
+                                value_code=property_type_code,
+                                included=(property_type_code in selected_codes),
+                                actor_id=user["id"],
+                            )
+                        st.success("Disponibilidad actualizada. El catálogo y el Workflow usarán esta configuración.")
+                        st.rerun()
         if selected["can_adopt"]:
             st.info("Esta regla está disponible para el inmueble y todavía no está asignada.")
             if st.button("Asignar a este inmueble", type="primary", key=f"assign_catalog_rule_{property_id}_{selected['definition_id']}"):

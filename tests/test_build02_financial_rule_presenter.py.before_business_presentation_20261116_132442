@@ -1,0 +1,122 @@
+from services.financial_rule_presenter import (
+    business_scope,
+    business_status,
+    configured_parameter_rows,
+    parameter_schema_rows,
+)
+
+
+SCHEMA = {
+    "amount": {
+        "type": "number",
+        "minimum": 0.01,
+        "currency": "MXN",
+    },
+    "frequency": {
+        "type": "string",
+        "allowed": ["MENSUAL"],
+    },
+    "due_day": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 31,
+        "optional": True,
+    },
+}
+
+
+def test_schema_has_three_parameters():
+    rows = parameter_schema_rows(SCHEMA)
+    assert len(rows) == 3
+
+
+def test_amount_is_business_friendly():
+    rows = parameter_schema_rows(SCHEMA)
+    amount = next(
+        row
+        for row in rows
+        if row["Código"] == "amount"
+    )
+
+    assert amount["Parámetro"] == "Importe"
+    assert amount["Tipo"] == "Monetario"
+    assert "$0.01 MXN" in amount["Condición"]
+    assert amount["Obligatorio"] == "Sí"
+
+
+def test_frequency_is_translated():
+    rows = parameter_schema_rows(SCHEMA)
+    frequency = next(
+        row
+        for row in rows
+        if row["Código"] == "frequency"
+    )
+
+    assert frequency["Parámetro"] == "Frecuencia"
+    assert "Mensual" in frequency["Condición"]
+
+
+def test_due_day_is_optional():
+    rows = parameter_schema_rows(SCHEMA)
+    due_day = next(
+        row
+        for row in rows
+        if row["Código"] == "due_day"
+    )
+
+    assert (
+        due_day["Parámetro"]
+        == "Día de vencimiento"
+    )
+    assert (
+        due_day["Tipo"]
+        == "Número entero"
+    )
+    assert due_day["Obligatorio"] == "No"
+    assert "Máximo 31" in due_day["Condición"]
+
+
+def test_configured_values_are_friendly():
+    rows = configured_parameter_rows(
+        SCHEMA,
+        {
+            "amount": 500,
+            "frequency": "MENSUAL",
+            "due_day": 10,
+        },
+    )
+
+    values = {
+        row["Parámetro"]:
+            row["Valor configurado"]
+        for row in rows
+    }
+
+    assert values["Importe"] == "500"
+    assert values["Frecuencia"] == "Mensual"
+    assert (
+        values["Día de vencimiento"]
+        == "10"
+    )
+
+
+def test_business_status():
+    assert (
+        business_status("SIN_CONFIGURAR")
+        == "Sin configurar"
+    )
+    assert (
+        business_status("APROBADO")
+        == "Aprobado"
+    )
+
+
+def test_business_scope():
+    assert (
+        business_scope("CORE")
+        == "Base del sistema"
+    )
+    assert (
+        business_scope("INMUEBLE")
+        == "Todo el inmueble"
+    )

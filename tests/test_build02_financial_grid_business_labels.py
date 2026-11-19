@@ -47,7 +47,11 @@ def test_grid_explains_configuration_type():
     )
 
     assert (
-        'row["override_label"]'
+        '_semantic_assignment('
+        in VIEW
+    )
+    assert (
+        'row.get("override_label")'
         in VIEW
     )
 

@@ -1,0 +1,54 @@
+from pathlib import Path
+
+
+VIEW = Path(
+    "views/financial_governance.py"
+).read_text(encoding="utf-8")
+
+
+def test_parameter_table_is_business_friendly():
+    assert (
+        "Parámetros configurables"
+        in VIEW
+    )
+    assert (
+        "parameter_schema_rows("
+        in VIEW
+    )
+
+
+def test_technical_definition_is_collapsed():
+    assert "st.expander(" in VIEW
+    assert (
+        '"Ver definición técnica"'
+        in VIEW
+    )
+    assert "expanded=False" in VIEW
+
+
+def test_version_values_are_supported():
+    assert (
+        "Valores de la versión"
+        in VIEW
+    )
+    assert (
+        "configured_parameter_rows("
+        in VIEW
+    )
+
+
+def test_business_labels_are_used():
+    assert "business_status(" in VIEW
+    assert "business_scope(" in VIEW
+
+
+def test_parameter_ui_is_read_only():
+    forbidden = (
+        "create_financial_rule(",
+        "create_rule_version(",
+        "approve_rule_version(",
+        "close_rule_version(",
+    )
+
+    for token in forbidden:
+        assert token not in VIEW

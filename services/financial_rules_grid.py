@@ -828,3 +828,26 @@ def suggest_financial_rule_code(*, name, year=None):
         if match:
             highest=max(highest,int(match.group(1)))
     return f"{acronym}-{code_year}-RN{highest+1:03d}"
+
+
+def list_global_financial_template_catalog(*, user):
+    """Global template catalog. Does not require or infer a property context."""
+    if not user or not user.get("activo"):
+        raise PermissionError("USER_INACTIVE")
+    if user.get("rol_global") not in {"ROOT", "SUPERADMIN"}:
+        raise PermissionError("GLOBAL_FINANCIAL_CATALOG_REQUIRES_GLOBAL_ADMIN")
+    definitions=fetch_all("""
+        SELECT id AS definition_id, codigo AS definition_code,
+               nombre AS definition_name, descripcion AS definition_description,
+               dominio_codigo, activo
+        FROM financial_rule_definitions
+        WHERE activo=TRUE
+        ORDER BY nombre, codigo
+    """)
+    applicability=_applicability_map({row["definition_id"] for row in definitions})
+    return [
+        {**dict(row),
+         "applicability_items": applicability.get(row["definition_id"], []),
+         "applicability_label": _applicability_label(applicability.get(row["definition_id"], []))}
+        for row in definitions
+    ]

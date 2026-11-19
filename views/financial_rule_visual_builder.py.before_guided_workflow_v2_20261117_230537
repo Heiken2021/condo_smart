@@ -1,0 +1,196 @@
+from datetime import date
+
+import streamlit as st
+
+from core.authorization import authorize
+from services.financial_rules_grid import (
+    list_global_financial_rule_catalog,
+    suggest_financial_rule_code,
+)
+
+STAGES = (
+    ('1', 'Definición', 'Qué regla es y por qué existe', '📄'),
+    ('2', 'Disponibilidad', 'Dónde puede utilizarse', '🌐'),
+    ('3', 'Alcance', 'A quién se asigna', '🏢'),
+    ('4', 'Parámetros', 'Valores configurables', '🎛️'),
+    ('5', 'Versión', 'Vigencia y control', '📑'),
+    ('6', 'Aprobación', 'Revisión final', '🛡️'),
+)
+ADVANCED = (
+    ('Dependencias', 'Usa valores gobernados de otras reglas', '🔗'),
+    ('Excepciones', 'Casos especiales versionados y auditables', '⚗️'),
+)
+
+
+def _key(property_id, name):
+    return f'rule_visual_builder_{property_id}_{name}'
+
+
+def _init(property_id):
+    values = {
+        'stage': 0,
+        'name': '',
+        'code': '',
+        'description': '',
+        'availability': 'Inmueble activo',
+        'scope': 'INMUEBLE',
+        'parameters_ready': False,
+        'version_ready': False,
+    }
+    for name, value in values.items():
+        st.session_state.setdefault(_key(property_id, name), value)
+
+
+def _get(property_id, name):
+    return st.session_state.get(_key(property_id, name))
+
+
+def _set(property_id, name, value):
+    st.session_state[_key(property_id, name)] = value
+
+
+def _status(property_id, index):
+    current = _get(property_id, 'stage')
+    if index < current:
+        return '✅', 'Completado'
+    if index == current:
+        return '●', 'En edición'
+    return '○', 'Pendiente'
+
+
+def _stage_strip(property_id):
+    columns = st.columns(6)
+    for index, (number, label, subtitle, icon) in enumerate(STAGES):
+        symbol, status = _status(property_id, index)
+        with columns[index]:
+            st.markdown(f'**{number}. {label}**  \n{icon} {symbol}  \n{subtitle}')
+            if st.button(label, key=_key(property_id, f'jump_{index}'), use_container_width=True):
+                _set(property_id, 'stage', index)
+                st.rerun()
+
+
+def _library(property_id):
+    st.markdown('### Piezas disponibles')
+    st.caption('Selecciona una pieza para editarla en el lienzo.')
+    for index, (_, label, subtitle, icon) in enumerate(STAGES):
+        if st.button(f'{icon}  {label}\n\n{subtitle}', key=_key(property_id, f'piece_{index}'), use_container_width=True):
+            _set(property_id, 'stage', index)
+            st.rerun()
+    st.divider()
+    st.markdown('**Piezas avanzadas**')
+    for label, subtitle, icon in ADVANCED:
+        st.info(f'{icon} **{label}**\n\n{subtitle}')
+
+
+def _definition(property_id):
+    st.markdown('#### 📄 Definición de la regla')
+    name = st.text_input('Nombre de la regla', value=_get(property_id, 'name'), key=_key(property_id, 'name_widget'))
+    if name != _get(property_id, 'name'):
+        _set(property_id, 'name', name)
+        if name.strip():
+            _set(property_id, 'code', suggest_financial_rule_code(name=name.strip()))
+    code = st.text_input('Código sugerido', value=_get(property_id, 'code'), key=_key(property_id, 'code_widget'), help='Condo_Smart propone la clave. Puedes editarla antes de guardar.')
+    _set(property_id, 'code', code)
+    description = st.text_area('Descripción', value=_get(property_id, 'description'), key=_key(property_id, 'description_widget'))
+    _set(property_id, 'description', description)
+    return bool(name.strip() and code.strip() and description.strip())
+
+
+def _availability(property_id, catalog):
+    st.markdown('#### 🌐 Disponibilidad')
+    st.caption('Define dónde estará disponible la definición. El piloto no cambia la aplicabilidad persistida.')
+    options = ('Inmueble activo', 'Catálogo global', 'Plantilla por tipología')
+    selected = st.radio('Disponibilidad de la regla', options, index=options.index(_get(property_id, 'availability')), key=_key(property_id, 'availability_widget'))
+    _set(property_id, 'availability', selected)
+    st.info(f'Catálogo gobernado consultado: {len(catalog)} definiciones visibles.')
+    return True
+
+
+def _scope(property_id):
+    st.markdown('#### 🏢 Alcance de asignación')
+    options = ('INMUEBLE', 'ESTRUCTURA', 'ESPACIO')
+    selected = st.radio('Nivel de aplicación', options, index=options.index(_get(property_id, 'scope')), horizontal=True, key=_key(property_id, 'scope_widget'))
+    _set(property_id, 'scope', selected)
+    st.warning('Piloto Draft-only: el alcance se valida visualmente, pero todavía no crea ni modifica una asignación.')
+    return True
+
+
+def _parameters(property_id):
+    st.markdown('#### 🎛️ Parámetros')
+    st.caption('Esta primera iteración valida el recorrido visual. La siguiente conectará aquí el esquema dinámico gobernado ya existente.')
+    ready = st.checkbox('He revisado la estructura de parámetros', value=bool(_get(property_id, 'parameters_ready')), key=_key(property_id, 'parameters_widget'))
+    _set(property_id, 'parameters_ready', ready)
+    return ready
+
+
+def _version(property_id):
+    st.markdown('#### 📑 Versión')
+    effective = st.date_input('Vigente desde', value=date.today(), key=_key(property_id, 'effective_from'))
+    st.write('**Estado inicial:** Borrador')
+    ready = st.checkbox('Vigencia revisada', value=bool(_get(property_id, 'version_ready')), key=_key(property_id, 'version_widget'))
+    _set(property_id, 'version_ready', ready)
+    return bool(effective and ready)
+
+
+def _approval(property_id):
+    st.markdown('#### 🛡️ Aprobación')
+    st.success('Flujo visual listo para revisión')
+    st.warning('La aprobación está deshabilitada en el piloto. Se habilitará después del QA del Rule Visual Builder.')
+    st.button('Enviar a aprobación', disabled=True, use_container_width=True, key=_key(property_id, 'approval_disabled'))
+    return True
+
+
+def _canvas(property_id):
+    st.markdown('### Lienzo de la regla')
+    current = _get(property_id, 'stage')
+    for index, (number, label, subtitle, icon) in enumerate(STAGES):
+        symbol, status = _status(property_id, index)
+        marker = '🟢' if index < current else '🔵' if index == current else '⚪'
+        st.markdown(f'{marker} **{number}. {label}** · {status}  \n{icon} {subtitle}')
+        if index < len(STAGES) - 1:
+            st.markdown('&nbsp;&nbsp;&nbsp;&nbsp;↓', unsafe_allow_html=True)
+
+
+def _detail(property_id, catalog):
+    stage = _get(property_id, 'stage')
+    renderers = (
+        lambda: _definition(property_id),
+        lambda: _availability(property_id, catalog),
+        lambda: _scope(property_id),
+        lambda: _parameters(property_id),
+        lambda: _version(property_id),
+        lambda: _approval(property_id),
+    )
+    ready = renderers[stage]()
+    st.divider()
+    previous, next_column = st.columns(2)
+    with previous:
+        if st.button('← Anterior', disabled=stage == 0, use_container_width=True, key=_key(property_id, 'previous')):
+            _set(property_id, 'stage', max(0, stage - 1))
+            st.rerun()
+    with next_column:
+        if st.button('Siguiente →', disabled=(stage == len(STAGES) - 1 or not ready), type='primary', use_container_width=True, key=_key(property_id, 'next')):
+            _set(property_id, 'stage', min(len(STAGES) - 1, stage + 1))
+            st.rerun()
+
+
+def render_rule_visual_builder(*, property_id, user):
+    decision = authorize(user, 'FINANZAS_GOBIERNO_CONSULTAR', property_id)
+    if not decision.allowed:
+        st.warning('Sin permiso para consultar el Gobierno Financiero.')
+        return
+    _init(property_id)
+    catalog = list_global_financial_rule_catalog(property_id=property_id, user=user)
+    st.markdown('## Rule Visual Builder')
+    st.caption('Piloto visual para construir reglas de negocio con el mismo Gobierno Financiero de Condo_Smart.')
+    st.info('Modo piloto · Draft-only · sin aprobación automática · sin escrituras directas en base de datos.')
+    _stage_strip(property_id)
+    st.divider()
+    library, canvas, detail = st.columns([1.05, 1.75, 1.35], gap='medium')
+    with library:
+        _library(property_id)
+    with canvas:
+        _canvas(property_id)
+    with detail:
+        st.markdown('### Detalle de la pieza')
+        _detail(property_id, catalog)

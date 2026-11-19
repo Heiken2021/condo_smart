@@ -2687,3 +2687,41 @@ def set_financial_rule_applicability(
             connection.rollback(); raise
     row["audit_event_id"]=audit["id"]; row["trace_id"]=trace_id
     return row
+
+
+def set_global_financial_rule_applicability(
+    *, definition_id, dimension_code, value_code, included, actor_id,
+):
+    """Global applicability command. No synthetic property context is used."""
+    actor=_actor(actor_id)
+    if actor.get("rol_global") not in {"ROOT", "SUPERADMIN"}:
+        raise PermissionError("FINANCIAL_RULE_APPLICABILITY_REQUIRES_GLOBAL_ADMIN")
+    dimension_code=_required_text(dimension_code,"FINANCIAL_RULE_DIMENSION_REQUIRED",40).upper()
+    value_code=_required_text(value_code,"FINANCIAL_RULE_APPLICABILITY_VALUE_REQUIRED",100).upper()
+    trace_id=new_trace_id()
+    with pool().connection() as connection:
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("""
+                    INSERT INTO financial_rule_applicability(
+                        rule_definition_id,dimension_codigo,valor_codigo,incluido
+                    ) VALUES(%s,%s,%s,%s)
+                    ON CONFLICT(rule_definition_id,dimension_codigo,valor_codigo)
+                    DO UPDATE SET incluido=EXCLUDED.incluido
+                    RETURNING *
+                """,(definition_id,dimension_code,value_code,bool(included)))
+                row=dict(cursor.fetchone())
+                audit=_insert_audit(
+                    cursor,actor=actor,property_id=None,
+                    operation_type="FINANCIAL_RULE_APPLICABILITY_SET",
+                    entity="FINANCIAL_RULE_DEFINITION",entity_id=definition_id,
+                    new_status="ACTIVO",detail=value_code,
+                    metadata={"dimension_codigo":dimension_code,"valor_codigo":value_code,
+                              "incluido":bool(included),"contexto":"GLOBAL"},
+                    trace_id=trace_id,
+                )
+            connection.commit()
+        except Exception:
+            connection.rollback(); raise
+    row["audit_event_id"]=audit["id"]; row["trace_id"]=trace_id
+    return row
