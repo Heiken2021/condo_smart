@@ -44,3 +44,11 @@ R2_SOURCE_FOR_R3.txt
 # Informes y respaldos locales de auditoría
 *.before_security_fix_*
 security_reports/
+# Local generated backups and diagnostics
+.*-backup-*/
+*.before_*
+*.before_edit_dependency_preview
+*_context.txt
+*_diagnostic.txt
+*_preflight.txt
+*.zip
