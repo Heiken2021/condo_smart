@@ -14,7 +14,12 @@ def table(rows,entity,visible):
     if 'activo' in d.columns:d['activo']=d['activo'].map(state)
     d=d.rename(columns=labels(entity));st.dataframe(d,hide_index=True,use_container_width=True);return d
 def metrics(items):
-    for col,(name,value) in zip(st.columns(len(items)),items):col.metric(name,value)
+    # Build 036A: compatible with the installed Streamlit runtime.
+    # CSS media queries reflow these columns in narrow browser viewports.
+    columns = st.columns(min(3, max(1, len(items))))
+    for index, (name, value) in enumerate(items):
+        columns[index % len(columns)].metric(name, value)
+
 def _datauri(data,mime='image/jpeg'):
     if not data:return ''
     return 'data:'+(mime or 'image/jpeg')+';base64,'+base64.b64encode(bytes(data)).decode()

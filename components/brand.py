@@ -60,6 +60,39 @@ def inject_theme():
 [data-testid="stSidebar"] .stButton>button[kind="primary"]{{background:linear-gradient(90deg,#e9f4ff,#edf9f2);border-color:transparent;color:#0878C9}}
 .cs-nav-icon,.cs-native-icon{{width:34px;height:42px;display:inline-flex;align-items:center;justify-content:center;flex:0 0 34px}}.cs-nav-icon svg,.cs-native-icon svg{{display:block;width:30px;height:30px;overflow:visible}}
 .cs-designer-icon{{width:58px!important;height:58px!important;object-fit:contain!important;object-position:center center!important;display:block!important;margin:0 auto!important;filter:none!important;border:0!important;background:transparent!important}}
+    /* Build 036 Mobile Foundation: responsive presentation only. */
+    @media (max-width: 768px) {{
+      :root{{--cs-radius:14px}}
+      .block-container{{padding:1rem .75rem 5rem!important;max-width:100%!important}}
+      [data-testid="stSidebar"]{{min-width:min(88vw,330px)!important;max-width:min(88vw,330px)!important}}
+      [data-testid="stSidebar"] .cs-logo{{margin-bottom:.55rem!important}}
+      [data-testid="stSidebar"] .cs-logo img{{max-height:82px!important;width:auto!important;max-width:82%!important}}
+      [data-testid="stSidebar"] .stButton>button{{min-height:44px!important;padding:.45rem .6rem!important}}
+      .cs-designer-icon{{width:44px!important;height:44px!important}}
+      .cs-menu-offset{{height:10px!important;min-height:10px!important}}
+      .st-key-quick_property_bar{{position:static!important;top:auto!important;margin:0 0 .75rem!important}}
+      .st-key-quick_property_bar [data-testid="stHorizontalBlock"]{{flex-wrap:wrap!important;gap:.45rem!important}}
+      .st-key-quick_property_bar [data-testid="column"]{{min-width:100%!important;flex:1 1 100%!important;width:100%!important}}
+      [data-testid="stHorizontalBlock"]{{flex-wrap:wrap!important;gap:.65rem!important}}
+      [data-testid="stHorizontalBlock"]>[data-testid="column"]{{min-width:min(100%,280px)!important;flex:1 1 280px!important;width:auto!important}}
+      [data-testid="stMetric"]{{padding:.65rem!important;border:1px solid #e2ebf1;border-radius:14px;background:rgba(255,255,255,.78)}}
+      [data-testid="stDataFrame"]{{max-width:100%!important;overflow:auto!important}}
+      [data-testid="stTabs"] [role="tablist"]{{overflow-x:auto!important;flex-wrap:nowrap!important;scrollbar-width:thin}}
+      [data-testid="stTabs"] [role="tab"]{{white-space:nowrap!important;min-height:44px!important}}
+      [data-testid="stRadio"] [role="radiogroup"]{{flex-wrap:wrap!important;gap:.35rem!important}}
+      .cs-selected-space{{font-size:1.1rem!important;padding:10px 12px!important}}
+      h1{{font-size:1.65rem!important}} h2{{font-size:1.4rem!important}} h3{{font-size:1.2rem!important}}
+      /* Build 036B Mobile Shell: prevent desktop sidebar remnants from stealing viewport width. */
+      /* Build 036C: preserve Streamlit native slide-in/slide-out transform. */
+      [data-testid="stSidebar"]{{min-width:min(78vw,300px)!important;max-width:min(78vw,300px)!important;width:min(78vw,300px)!important;overflow:auto!important}}
+      [data-testid="stSidebar"] [data-testid="stSidebarContent"]{{width:100%!important;max-width:100%!important}}
+      [data-testid="stAppViewContainer"], [data-testid="stMain"], .main{{margin-left:0!important;max-width:100vw!important;width:100%!important;overflow-x:hidden!important}}
+      [data-testid="stMainBlockContainer"], .block-container{{margin-left:0!important;margin-right:0!important;width:100%!important;max-width:100%!important;padding-left:.75rem!important;padding-right:.75rem!important;box-sizing:border-box!important}}
+      [data-testid="stHeader"]{{max-width:100vw!important}}
+      [data-testid="stDataFrame"]{{width:100%!important;min-width:0!important;contain:inline-size}}
+      [data-testid="stDataFrame"]>div{{overflow-x:auto!important;max-width:100%!important}}
+      p,li,.stMarkdown{{overflow-wrap:anywhere}}
+    }}
 </style>''',unsafe_allow_html=True)
 
 def menu_icon_uri(name):

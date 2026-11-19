@@ -13,7 +13,14 @@ from services.financial_rules_grid import (
     list_global_financial_rule_catalog,
     suggest_financial_rule_code,
 )
+from services.financial_governance_commands import (
+    create_financial_rule_with_initial_draft,
+)
 
+
+# Build 037 Workflow Persistence Foundation
+PRIORITY_LEVELS = ("Baja", "Normal", "Alta", "Crítica")
+PRIORITY_VALUES = {"Baja": 100, "Normal": 200, "Alta": 300, "Crítica": 400}
 
 WORKFLOW_STEPS = (
     {
@@ -92,9 +99,14 @@ def _init(property_id):
         "scope": "Todo el inmueble",
         "inheritance": True,
         "override": False,
+        "priority_level": "Normal",
         "effective_from": date.today(),
         "change_reason": "Configuración inicial de la regla",
         "version_confirmed": False,
+        "actor_id": None,
+        "saved_rule_id": None,
+        "saved_version_id": None,
+        "show_saved_dialog": False,
     }
     for name, value in defaults.items():
         st.session_state.setdefault(_key(property_id, name), value)
@@ -416,6 +428,15 @@ def _scope(property_id):
         help="Actívalo únicamente cuando exista una configuración superior que deba sustituirse.",
     )
     _set(property_id, "override", override)
+    priority_level = st.selectbox(
+        "Prioridad de aplicación",
+        PRIORITY_LEVELS,
+        index=PRIORITY_LEVELS.index(_get(property_id, "priority_level") or "Normal"),
+        key=_key(property_id, "priority_input"),
+        help="La prioridad resuelve conflictos entre reglas igualmente aplicables. Normal es el valor recomendado.",
+    )
+    _set(property_id, "priority_level", priority_level)
+    st.caption("Orden de resolución: alcance más específico → override explícito → prioridad de aplicación.")
     ready = _step_complete(property_id, 2)
     _gate("Alcance y comportamiento de herencia definidos.", ready)
     return ready
@@ -480,6 +501,34 @@ def _version(property_id):
     return ready
 
 
+@st.dialog("Borrador guardado correctamente")
+def _draft_saved_dialog(property_id):
+    st.success("La regla y su versión v1 quedaron guardadas en estado Borrador.")
+    rows = (
+        ("Regla", _get(property_id, "name") or "—"),
+        ("Código", _get(property_id, "code") or "—"),
+        ("Disponibilidad", _get(property_id, "availability") or "—"),
+        ("Alcance", _get(property_id, "scope") or "—"),
+        ("Herencia", "Permitida" if _get(property_id, "inheritance") else "No permitida"),
+        ("Override", "Sí" if _get(property_id, "override") else "No"),
+        ("Prioridad", _get(property_id, "priority_level") or "Normal"),
+        ("Vigencia", str(_get(property_id, "effective_from"))),
+        ("Estado", "⚠ Borrador"),
+        ("Regla ID", _get(property_id, "saved_rule_id") or "—"),
+        ("Versión", f'v1 #{_get(property_id, "saved_version_id")}' if _get(property_id, "saved_version_id") else "—"),
+    )
+    for label, value in rows:
+        st.markdown(f"**{label}:** {value}")
+    st.markdown("#### Parámetros configurados")
+    parameters = _get(property_id, "parameters") or {}
+    for code, value in parameters.items():
+        display_value = "Sí" if value is True else "No" if value is False else friendly_value(value)
+        st.markdown(f"- **{parameter_label(code)}:** {display_value}")
+    if st.button("Cerrar", type="primary", use_container_width=True, key=_key(property_id, "close_saved_dialog")):
+        _set(property_id, "show_saved_dialog", False)
+        st.rerun()
+
+
 def _review(property_id):
     st.markdown("### Tu regla está lista para revisión")
     rows = (
@@ -489,6 +538,7 @@ def _review(property_id):
         ("Alcance", _get(property_id, "scope") or "Pendiente"),
         ("Herencia", "Permitida" if _get(property_id, "inheritance") else "No permitida"),
         ("Override", "Sí" if _get(property_id, "override") else "No"),
+        ("Prioridad", _get(property_id, "priority_level") or "Normal"),
         ("Vigencia", str(_get(property_id, "effective_from"))),
         ("Estado inicial", "Borrador"),
     )
@@ -506,12 +556,53 @@ def _review(property_id):
 
     all_ready = all(_step_complete(property_id, index) for index in range(5))
     _gate("Todas las validaciones previas están completas." if all_ready else "Hay pasos pendientes; vuelve al primero incompleto.", all_ready)
-    st.warning("Piloto UX v2: Crear borrador y Enviar a aprobación permanecen deshabilitados hasta aprobar el QA visual y funcional.")
+    can_manage = bool(_get(property_id, "can_manage"))
+    property_scope = _get(property_id, "scope") == "Todo el inmueble"
+    save_ready = all_ready and can_manage and property_scope and not _get(property_id, "saved_version_id")
+    if not property_scope:
+        st.warning("Guardar borrador se habilitará para Estructura/Espacio cuando el workflow capture sus identificadores gobernados. Por ahora la persistencia real está habilitada únicamente para Todo el inmueble.")
+    elif not can_manage:
+        st.warning("Tu usuario no dispone de FINANZAS_REGLA_GESTIONAR para guardar esta regla.")
     left, right = st.columns(2)
     with left:
-        st.button("Guardar borrador", disabled=True, use_container_width=True, key=_key(property_id, "save_disabled"))
+        save_clicked = st.button(
+            "Guardar borrador",
+            disabled=not save_ready,
+            type="primary",
+            use_container_width=True,
+            key=_key(property_id, "save_draft"),
+        )
     with right:
         st.button("Enviar a aprobación", disabled=True, use_container_width=True, key=_key(property_id, "approve_disabled"))
+    if save_clicked:
+        try:
+            result = create_financial_rule_with_initial_draft(
+                property_id=property_id,
+                definition_id=_get(property_id, "definition_id"),
+                scope_level="INMUEBLE",
+                code=str(_get(property_id, "code") or "").strip(),
+                name=str(_get(property_id, "name") or "").strip(),
+                description=str(_get(property_id, "description") or "").strip() or None,
+                inherits=bool(_get(property_id, "inheritance")),
+                is_override=bool(_get(property_id, "override")),
+                priority=PRIORITY_VALUES[_get(property_id, "priority_level") or "Normal"],
+                effective_from=_get(property_id, "effective_from"),
+                parameters=_get(property_id, "parameters") or {},
+                change_reason=str(_get(property_id, "change_reason") or "").strip() or None,
+                actor_id=_get(property_id, "actor_id"),
+            )
+        except Exception as exc:
+            st.error(f"No fue posible guardar el borrador: {exc}")
+        else:
+            _set(property_id, "saved_rule_id", result["rule"]["id"])
+            _set(property_id, "saved_version_id", result["version"]["id"])
+            _set(property_id, "show_saved_dialog", True)
+            st.rerun()
+    if _get(property_id, "show_saved_dialog") and _get(property_id, "saved_version_id"):
+        _draft_saved_dialog(property_id)
+    if _get(property_id, "saved_version_id"):
+        st.success(f'⚠ Borrador persistido · Regla #{_get(property_id, "saved_rule_id")} · v1 #{_get(property_id, "saved_version_id")}')
+        st.info("La aprobación permanece separada y todavía no se ejecuta desde este Builder.")
     return all_ready
 
 
@@ -563,6 +654,11 @@ def render_rule_visual_builder(*, property_id, user):
         st.warning("Sin permiso para consultar el Gobierno Financiero.")
         return
     _init(property_id)
+    _set(property_id, "actor_id", user["id"])
+    manage_decision = authorize(user, "FINANZAS_REGLA_GESTIONAR", property_id)
+    approve_decision = authorize(user, "FINANZAS_REGLA_APROBAR", property_id)
+    _set(property_id, "can_manage", bool(manage_decision.allowed))
+    _set(property_id, "can_approve", bool(approve_decision.allowed))
     _css()
     catalog = list_global_financial_rule_catalog(
         property_id=property_id,

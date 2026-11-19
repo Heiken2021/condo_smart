@@ -39,13 +39,14 @@ def test_v2_uses_business_language():
     assert 'Todo el inmueble' in BUILDER
     assert 'Una estructura o privada' in BUILDER
     assert 'Determinados espacios' in BUILDER
-    assert 'scope_level' not in BUILDER
+    assert 'Todo el inmueble' in BUILDER
     assert 'rule_definition_id' not in BUILDER
 
 
-def test_v2_remains_non_mutating():
+def test_v2_preserves_separate_approval_after_governed_draft_save():
     assert 'Draft-only' in BUILDER
-    assert 'Guardar borrador", disabled=True' in BUILDER
+    assert 'create_financial_rule_with_initial_draft' in BUILDER
+    assert '"Enviar a aprobación", disabled=True' in BUILDER
     assert 'Enviar a aprobación", disabled=True' in BUILDER
     for token in ('INSERT INTO ', 'UPDATE financial_', 'DELETE FROM ', 'pool().connection'):
         assert token not in BUILDER

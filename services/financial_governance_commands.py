@@ -1207,6 +1207,65 @@ def _validate_rule_parameters(
     return validated
 
 
+def create_financial_rule_with_initial_draft(
+    *, property_id, definition_id, scope_level, code, name,
+    effective_from, parameters, actor_id, policy_id=None,
+    structure_id=None, space_id=None, applicable_type=None,
+    description=None, inherits=True, is_override=False,
+    priority=100, effective_to=None, change_reason=None,
+):
+    """Atomically create a financial rule and its v1 BORRADOR."""
+    actor = _require_actor(actor_id, "FINANZAS_REGLA_GESTIONAR", property_id)
+    scope_level = _required_text(scope_level, "FINANCIAL_RULE_SCOPE_REQUIRED", 30).upper()
+    if scope_level not in {"GLOBAL", "INMUEBLE", "ESTRUCTURA", "ESPACIO"}:
+        raise ValueError("INVALID_PROPERTY_FINANCIAL_RULE_SCOPE")
+    code = _required_text(code, "FINANCIAL_RULE_CODE_REQUIRED", 100).upper()
+    name = _required_text(name, "FINANCIAL_RULE_NAME_REQUIRED", 200)
+    priority = int(priority)
+    if priority < 0: raise ValueError("INVALID_FINANCIAL_RULE_PRIORITY")
+    effective_from, effective_to = _valid_dates(effective_from, effective_to)
+    trace_id = new_trace_id()
+    with pool().connection() as connection:
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """SELECT id, esquema_parametros FROM financial_rule_definitions WHERE id=%s AND activo=TRUE""",
+                    (definition_id,),
+                )
+                definition = cursor.fetchone()
+                if not definition: raise ValueError("FINANCIAL_RULE_DEFINITION_NOT_FOUND")
+                parameters = _validate_rule_parameters(cursor, definition_id=definition_id, parameters=parameters)
+                cursor.execute(
+                    """INSERT INTO financial_rules(
+                        rule_definition_id,policy_id,scope_level,condominio_id,estructura_id,espacio_id,
+                        tipo_aplicable_codigo,codigo,nombre,descripcion,hereda,es_override,prioridad,activo,creado_por
+                    ) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,TRUE,%s) RETURNING *""",
+                    (definition_id,policy_id,scope_level,None if scope_level=="GLOBAL" else property_id,
+                     structure_id,space_id,applicable_type,code,name,_optional_text(description),
+                     bool(inherits),bool(is_override),priority,actor["id"]),
+                )
+                rule=dict(cursor.fetchone())
+                cursor.execute(
+                    """INSERT INTO financial_rule_versions(
+                        rule_id,version_num,vigente_desde,vigente_hasta,estado_codigo,parametros,creado_por,motivo_cambio
+                    ) VALUES(%s,1,%s,%s,'BORRADOR',%s::jsonb,%s,%s) RETURNING *""",
+                    (rule["id"],effective_from,effective_to,_json(parameters),actor["id"],_optional_text(change_reason)),
+                )
+                version=dict(cursor.fetchone())
+                rule_audit=_insert_audit(cursor,actor=actor,property_id=property_id,operation_type="FINANCIAL_RULE_CREATED",
+                    entity="FINANCIAL_RULE",entity_id=rule["id"],new_status="ACTIVO",detail=name,
+                    metadata={"definition_id":definition_id,"scope_level":scope_level,"initial_version_id":version["id"]},trace_id=trace_id)
+                version_audit=_insert_audit(cursor,actor=actor,property_id=property_id,operation_type="FINANCIAL_RULE_VERSION_CREATED",
+                    entity="FINANCIAL_RULE_VERSION",entity_id=version["id"],new_status="BORRADOR",detail=change_reason,
+                    metadata={"rule_id":rule["id"],"version_num":1,"vigente_desde":effective_from,"vigente_hasta":effective_to},trace_id=trace_id)
+            connection.commit()
+        except Exception:
+            connection.rollback(); raise
+    rule["audit_event_id"]=rule_audit["id"]; rule["trace_id"]=trace_id
+    version["audit_event_id"]=version_audit["id"]; version["trace_id"]=trace_id
+    return {"rule":rule,"version":version,"trace_id":trace_id}
+
+
 def create_rule_version(
     *,
     property_id,

@@ -42,17 +42,30 @@ def _money(value):
     )
 
 
-def _semantic_status(value):
-    raw = str(value or "").upper()
-    label = business_status(value)
-    if raw in {"APROBADO", "APROBADA", "VIGENTE", "ACTIVO", "ACTIVA"}:
-        return f"🟢 {label}"
-    if raw in {"BORRADOR", "PENDIENTE", "SIN_CONFIGURAR", "SIN_VERSION"}:
-        return f"🟠 {label}"
-    if raw in {"BLOQUEADO", "BLOQUEADA", "VENCIDO", "VENCIDA", "RECHAZADO", "RECHAZADA"}:
-        return f"🔴 {label}"
-    return f"⚪ {label}"
+def _operational_semaphore(value):
+    code = str(value or "SIN_CONFIGURAR").upper()
+    if code in {"APROBADO", "APROBADA", "VIGENTE", "ACTIVO", "ACTIVA"}:
+        return "🟢 Correcto"
+    if code in {"RECHAZADO", "RECHAZADA", "BLOQUEADO", "BLOQUEADA", "VENCIDO", "VENCIDA"}:
+        return "🔴 Incidencia"
+    return "🟠 Requiere atención"
 
+
+def _semantic_status(value):
+    code = str(value or "SIN_CONFIGURAR").upper()
+    if code == "BORRADOR":
+        return "⚠️ Borrador"
+    if code in {"PENDIENTE", "PENDIENTE_APROBACION", "EN_REVISION"}:
+        return "➡️ Pendiente de aprobación"
+    if code in {"APROBADO", "APROBADA", "VIGENTE", "ACTIVO", "ACTIVA"}:
+        return "✅ Aprobada / Vigente"
+    if code in {"RECHAZADO", "RECHAZADA", "BLOQUEADO", "BLOQUEADA"}:
+        return "❌ Rechazada"
+    if code in {"FINALIZADO", "FINALIZADA", "CERRADO", "CERRADA", "VENCIDO", "VENCIDA"}:
+        return "⏹️ Finalizada"
+    if code in {"SIN_CONFIGURAR", "SIN_VERSION"}:
+        return "🔵 Sin configurar"
+    return "❓ Incompleta / Incidencia"
 
 def _semantic_origin(value):
     label = str(value or "Sin configurar")
@@ -416,9 +429,9 @@ def _render_governance_dashboard(*, property_id, user, property_rows):
             st.dataframe(
                 pd.DataFrame([
                     {
-                        "Semáforo": _semantic_status(row.get("status")),
+                        "Semáforo": _operational_semaphore(row.get("status")),
                         "Regla": row.get("display_name"),
-                        "Estado": business_status(row.get("status")),
+                        "Estado": _semantic_status(row.get("status")),
                         "Origen": _context_label(row.get("origin_label")),
                         "Versión": row.get("version_label") or "Sin versión",
                     }
@@ -627,6 +640,7 @@ def _render_rules(
                     is not None
                     else "Sin fecha de término"
                 ),
+                "Semáforo": _operational_semaphore(row["status"]),
                 "Estado": _semantic_status(row["status"]),
                 "Herencia permitida": (
                     "Por definir"
@@ -910,13 +924,7 @@ def _render_rules(
                             f"v"
                             f"{version['version_num']}"
                         ),
-                        "Estado": (
-                            business_status(
-                                version[
-                                    "estado_codigo"
-                                ]
-                            )
-                        ),
+                        "Estado": _semantic_status(version["estado_codigo"]),
                         "Desde": (
                             _date(
                                 version[

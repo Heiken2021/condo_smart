@@ -34,8 +34,9 @@ def test_review_has_business_parameter_summary():
     assert "friendly_value(value)" in BUILDER
 
 
-def test_030c_remains_non_mutating():
-    assert 'Guardar borrador", disabled=True' in BUILDER
+def test_030c_parameter_foundation_has_evolved_to_governed_save():
+    assert 'create_financial_rule_with_initial_draft' in BUILDER
+    assert '"Enviar a aprobación", disabled=True' in BUILDER
     assert 'Enviar a aprobación", disabled=True' in BUILDER
     for token in ("INSERT INTO ", "UPDATE financial_", "DELETE FROM ", "pool().connection"):
         assert token not in BUILDER
